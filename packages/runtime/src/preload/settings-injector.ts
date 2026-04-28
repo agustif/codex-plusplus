@@ -690,7 +690,7 @@ function tweakRow(t: ListedTweak, sections: SettingsSection[]): HTMLElement {
   // ── Avatar ─────────────────────────────────────────────────────────────
   const avatar = document.createElement("div");
   avatar.className =
-    "flex size-9 shrink-0 items-center justify-center rounded-md border border-token-border overflow-hidden text-token-text-secondary";
+    "flex size-24 shrink-0 items-center justify-center rounded-md border border-token-border overflow-hidden text-token-text-secondary";
   avatar.style.backgroundColor = "var(--color-token-bg-fog, transparent)";
   if (m.iconUrl) {
     const img = document.createElement("img");
@@ -699,7 +699,7 @@ function tweakRow(t: ListedTweak, sections: SettingsSection[]): HTMLElement {
     // Initial: show fallback initial in case the icon fails to load.
     const initial = (m.name?.[0] ?? "?").toUpperCase();
     const fallback = document.createElement("span");
-    fallback.className = "text-sm font-medium";
+    fallback.className = "text-3xl font-medium";
     fallback.textContent = initial;
     avatar.appendChild(fallback);
     img.style.display = "none";
@@ -718,7 +718,7 @@ function tweakRow(t: ListedTweak, sections: SettingsSection[]): HTMLElement {
   } else {
     const initial = (m.name?.[0] ?? "?").toUpperCase();
     const span = document.createElement("span");
-    span.className = "text-sm font-medium";
+    span.className = "text-3xl font-medium";
     span.textContent = initial;
     avatar.appendChild(span);
   }
