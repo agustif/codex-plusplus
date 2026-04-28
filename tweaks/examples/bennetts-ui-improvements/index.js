@@ -769,10 +769,7 @@ const FEATURES = {
 
     const clearStaleNodes = () => {
       document.querySelectorAll(`[${ATTR}="group"]`).forEach((node) => {
-        if (
-          node !== wrapper &&
-          (!marked.has(node) || node.dataset.codexppSidebarActionOwned === "true")
-        ) {
+        if (node.dataset.codexppSidebarActionOwned === "true") {
           node.remove();
         }
       });
@@ -844,9 +841,9 @@ const FEATURES = {
         .filter(
           (node) =>
             node instanceof HTMLElement &&
-            (options.includeHiddenSource ||
-              !node.closest(`[${ATTR}]`)) &&
             node.getAttribute(ATTR) !== "original" &&
+            node.getAttribute(ATTR) !== "source-original" &&
+            node.getAttribute(ATTR) !== "overlay" &&
             !isCompositeActionText(node),
         );
       const byLabel = new Map();
@@ -874,8 +871,12 @@ const FEATURES = {
 
     const markNode = (node, value) => {
       if (!marked.has(node)) {
-        node.dataset.codexppSidebarActionPrevClass = node.className || "";
-        node.dataset.codexppSidebarActionPrevStyle = node.style.cssText || "";
+        if (node.dataset.codexppSidebarActionPrevClass === undefined) {
+          node.dataset.codexppSidebarActionPrevClass = node.className || "";
+        }
+        if (node.dataset.codexppSidebarActionPrevStyle === undefined) {
+          node.dataset.codexppSidebarActionPrevStyle = node.style.cssText || "";
+        }
         marked.add(node);
       }
       node.setAttribute(ATTR, value);
@@ -1026,9 +1027,6 @@ const FEATURES = {
       const actionButtons = findActionButtons();
       if (!actionButtons) return;
       const originals = actionButtons.map((action) => action.original);
-
-      cleanupMarks();
-      removeWrapper();
 
       const group = commonAncestor(originals);
       if (!(group instanceof HTMLElement)) return;
