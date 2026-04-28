@@ -22,6 +22,8 @@
  *                          layout jump when opening/closing Settings.
  *  • sidebar-action-grid   Render the four main sidebar actions as a 2x2
  *                          grid of filled buttons.
+ *  • sidebar-render-monitor  Log sidebar mutation/commit activity for
+ *                            diagnosing excessive re-renders.
  *
  * Authoring notes
  * ---------------
@@ -43,6 +45,7 @@ module.exports = {
         "square-sidebar": false,
         "match-sidebar-width": true,
         "sidebar-action-grid": true,
+        "sidebar-render-monitor": false,
       },
     };
     this._state = state;
@@ -131,6 +134,12 @@ function renderSettings(root, state) {
       title: "Sidebar action grid",
       description:
         "Render New chat, Search, Plugins, and Automations as a compact 2x2 grid of filled buttons.",
+    },
+    {
+      id: "sidebar-render-monitor",
+      title: "Sidebar render monitor",
+      description:
+        "Log sidebar DOM mutation bursts and React commit counts to preload.log while diagnosing sidebar re-renders.",
     },
   ];
 
@@ -879,7 +888,20 @@ const FEATURES = {
         }
         marked.add(node);
       }
-      node.setAttribute(ATTR, value);
+      if (node.getAttribute(ATTR) !== value) node.setAttribute(ATTR, value);
+    };
+
+    const addClasses = (node, classes) => {
+      const missing = classes.filter((className) => !node.classList.contains(className));
+      if (missing.length) node.classList.add(...missing);
+    };
+
+    const setImportantStyle = (node, property, value) => {
+      if (node.style.getPropertyValue(property) === value &&
+          node.style.getPropertyPriority(property) === "important") {
+        return;
+      }
+      node.style.setProperty(property, value, "important");
     };
 
     const findFullWidthMount = (sidebar, originals) => {
@@ -987,7 +1009,7 @@ const FEATURES = {
       for (const node of button.querySelectorAll("kbd")) {
         if (node instanceof HTMLElement) {
           markNode(node, "shortcut");
-          node.style.setProperty("display", "none", "important");
+          setImportantStyle(node, "display", "none");
         }
       }
 
@@ -1001,20 +1023,20 @@ const FEATURES = {
 
       if (content instanceof HTMLElement) {
         if (content !== button) markNode(content, "content");
-        content.style.setProperty("display", "flex", "important");
-        content.style.setProperty("flex-direction", "column", "important");
-        content.style.setProperty("align-items", "flex-start", "important");
-        content.style.setProperty("justify-content", "center", "important");
-        content.style.setProperty("gap", "var(--spacing-1, 0.25rem)", "important");
-        content.style.setProperty("width", "100%", "important");
-        content.style.setProperty("min-width", "0", "important");
-        content.style.setProperty("text-align", "left", "important");
+        setImportantStyle(content, "display", "flex");
+        setImportantStyle(content, "flex-direction", "column");
+        setImportantStyle(content, "align-items", "flex-start");
+        setImportantStyle(content, "justify-content", "center");
+        setImportantStyle(content, "gap", "var(--spacing-1, 0.25rem)");
+        setImportantStyle(content, "width", "100%");
+        setImportantStyle(content, "min-width", "0");
+        setImportantStyle(content, "text-align", "left");
       }
 
       const icon = button.querySelector("svg");
       if (icon instanceof SVGElement) {
-        icon.style.setProperty("display", "block", "important");
-        icon.style.setProperty("flex-shrink", "0", "important");
+        setImportantStyle(icon, "display", "block");
+        setImportantStyle(icon, "flex-shrink", "0");
       }
     };
 
@@ -1032,30 +1054,31 @@ const FEATURES = {
       if (!(group instanceof HTMLElement)) return;
 
       markNode(group, "group");
-      group.classList.add(...WRAPPER_CLASS.split(/\s+/).filter(Boolean));
+      addClasses(group, WRAPPER_CLASS.split(/\s+/).filter(Boolean));
 
       for (const action of actionButtons) {
         const original = action.original;
         markNode(original, "button");
-        original.classList.add(
-          ...BUTTON_CLASS.replace(/\brelative\b/g, "")
+        addClasses(
+          original,
+          BUTTON_CLASS.replace(/\brelative\b/g, "")
             .split(/\s+/)
             .filter(Boolean),
         );
-        original.style.setProperty("display", "flex", "important");
-        original.style.setProperty(
+        setImportantStyle(original, "display", "flex");
+        setImportantStyle(
+          original,
           "border",
           "1px solid color-mix(in srgb, currentColor 14%, transparent)",
-          "important",
         );
-        original.style.setProperty(
+        setImportantStyle(
+          original,
           "background-color",
           "color-mix(in srgb, currentColor 5%, transparent)",
-          "important",
         );
-        original.style.setProperty("flex-direction", "column", "important");
-        original.style.setProperty("align-items", "flex-start", "important");
-        original.style.setProperty("justify-content", "center", "important");
+        setImportantStyle(original, "flex-direction", "column");
+        setImportantStyle(original, "align-items", "flex-start");
+        setImportantStyle(original, "justify-content", "center");
         stackOriginalButtonContent(original);
       }
       activeOriginals = originals;
@@ -1083,6 +1106,149 @@ const FEATURES = {
       removeWrapper();
       cleanupMarks();
       style.remove();
+    };
+  },
+
+  /**
+   * Lightweight sidebar render monitor.
+   *
+   * CDP is ideal for full timeline captures, but Codex does not expose a
+   * remote-debugging endpoint by default. This in-renderer monitor gives us
+   * a scoped signal: DOM mutation bursts in the sidebar plus app-level React
+   * commit counts while the sidebar is mounted.
+   */
+  "sidebar-render-monitor"(api) {
+    const ASIDE_SELECTOR =
+      "aside.pointer-events-auto.relative.flex.overflow-hidden";
+    const FLUSH_MS = 2_000;
+    const log = (...args) => api.log.info("[sidebar-monitor]", ...args);
+
+    let sidebar = null;
+    let sidebarObserver = null;
+    let commitCount = 0;
+    let lastCommitCount = 0;
+    let flushTimer = null;
+    let scanScheduled = false;
+    let stats = freshStats();
+
+    function freshStats() {
+      return {
+        mutations: 0,
+        childList: 0,
+        attributes: 0,
+        characterData: 0,
+        added: 0,
+        removed: 0,
+        classChanges: 0,
+        styleChanges: 0,
+        ariaChanges: 0,
+      };
+    }
+
+    function findSidebar() {
+      const node = document.querySelector(ASIDE_SELECTOR);
+      return node instanceof HTMLElement ? node : null;
+    }
+
+    function attachSidebar(next) {
+      if (sidebar === next) return;
+      sidebarObserver?.disconnect();
+      sidebarObserver = null;
+      sidebar = next;
+      if (!sidebar) return;
+
+      sidebarObserver = new MutationObserver((records) => {
+        for (const record of records) {
+          stats.mutations += 1;
+          if (record.type === "childList") {
+            stats.childList += 1;
+            stats.added += record.addedNodes.length;
+            stats.removed += record.removedNodes.length;
+          } else if (record.type === "attributes") {
+            stats.attributes += 1;
+            if (record.attributeName === "class") stats.classChanges += 1;
+            else if (record.attributeName === "style") stats.styleChanges += 1;
+            else if (record.attributeName?.startsWith("aria-")) {
+              stats.ariaChanges += 1;
+            }
+          } else if (record.type === "characterData") {
+            stats.characterData += 1;
+          }
+        }
+      });
+      sidebarObserver.observe(sidebar, {
+        attributes: true,
+        attributeFilter: ["class", "style", "aria-current", "aria-expanded", "aria-label"],
+        characterData: true,
+        childList: true,
+        subtree: true,
+      });
+      log("attached", sidebarSummary(sidebar));
+    }
+
+    function sidebarSummary(node) {
+      const rect = node.getBoundingClientRect();
+      return {
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        buttons: node.querySelectorAll("button, a").length,
+        text: compactText(node.textContent || "").slice(0, 120),
+      };
+    }
+
+    function scheduleScan() {
+      if (scanScheduled) return;
+      scanScheduled = true;
+      requestAnimationFrame(() => {
+        scanScheduled = false;
+        attachSidebar(findSidebar());
+      });
+    }
+
+    const documentObserver = new MutationObserver(scheduleScan);
+    documentObserver.observe(document.body, { childList: true, subtree: true });
+    attachSidebar(findSidebar());
+
+    const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    const previousOnCommitFiberRoot = hook?.onCommitFiberRoot;
+    if (hook && typeof previousOnCommitFiberRoot === "function") {
+      hook.onCommitFiberRoot = function (...args) {
+        if (findSidebar()) commitCount += 1;
+        return previousOnCommitFiberRoot.apply(this, args);
+      };
+      log("react commit hook attached");
+    } else {
+      log("react devtools hook unavailable");
+    }
+
+    flushTimer = window.setInterval(() => {
+      const commits = commitCount - lastCommitCount;
+      lastCommitCount = commitCount;
+      const hasDomActivity = Object.values(stats).some((value) => value > 0);
+      if (hasDomActivity || commits > 0) {
+        log("sample", {
+          ...stats,
+          commits,
+          sidebar: sidebar?.isConnected ? sidebarSummary(sidebar) : null,
+        });
+      }
+      stats = freshStats();
+    }, FLUSH_MS);
+
+    log("active");
+
+    return () => {
+      documentObserver.disconnect();
+      sidebarObserver?.disconnect();
+      if (flushTimer) window.clearInterval(flushTimer);
+      if (
+        hook &&
+        typeof previousOnCommitFiberRoot === "function" &&
+        hook.onCommitFiberRoot !== previousOnCommitFiberRoot
+      ) {
+        hook.onCommitFiberRoot = previousOnCommitFiberRoot;
+      }
+      log("stopped");
     };
   },
 };
@@ -1200,6 +1366,7 @@ function renderUsageBox(api, snapshot) {
   // Allow the parent to push fresh data without remounting us. We honour
   // the click-guard so refreshes don't reintroduce hover state mid-click.
   btn._refresh = (next) => {
+    if (next === currentSnap) return;
     currentSnap = next;
     if (btn.matches(":hover") && !suppressHover) applyHoverState(currentSnap);
     else applyValueState(currentSnap);
