@@ -20,6 +20,8 @@
  *  • match-sidebar-width   Force the settings page sidebar to match the
  *                          main UI sidebar's width, eliminating the
  *                          layout jump when opening/closing Settings.
+ *  • sidebar-action-grid   Render the four main sidebar actions as a 2x2
+ *                          grid of filled buttons.
  *
  * Authoring notes
  * ---------------
@@ -40,6 +42,7 @@ module.exports = {
         "show-usage-in-sidebar": false,
         "square-sidebar": false,
         "match-sidebar-width": true,
+        "sidebar-action-grid": true,
       },
     };
     this._state = state;
@@ -122,6 +125,12 @@ function renderSettings(root, state) {
       title: "Match settings sidebar width",
       description:
         "Stop the layout jump when opening Settings: the settings sidebar (fixed at 300px) is forced to match the main UI sidebar's current width.",
+    },
+    {
+      id: "sidebar-action-grid",
+      title: "Sidebar action grid",
+      description:
+        "Render New chat, Search, Plugins, and Automations as a compact 2x2 grid of filled buttons.",
     },
   ];
 
@@ -666,6 +675,415 @@ const FEATURES = {
     return () => {
       mut.disconnect();
       if (resizeObs) resizeObs.disconnect();
+      style.remove();
+    };
+  },
+
+  /**
+   * Render the four primary sidebar actions as a compact 2x2 grid.
+   *
+   * We keep the native buttons and click handlers intact, hide them, and
+   * render proxy buttons that forward clicks to the originals. This avoids
+   * inheriting the narrow icon-button constraints Codex applies to the
+   * existing action row.
+   */
+  "sidebar-action-grid"(api) {
+    const STYLE_ID = "codexpp-sidebar-action-grid";
+    const ATTR = "data-codexpp-sidebar-action-grid";
+    const WRAPPER_CLASS = "grid grid-cols-2 gap-2 w-full px-row-x";
+    const BUTTON_CLASS =
+      "flex min-w-0 flex-col items-start justify-center gap-1 rounded-lg " +
+      "border border-token-border bg-token-foreground/5 ps-3.5 pe-3.5 py-3 text-left " +
+      "text-sm text-token-text-primary hover:bg-token-foreground/10 " +
+      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 " +
+      "focus-visible:outline-token-border cursor-interaction";
+    const actions = [
+      { key: "new chat", label: "New chat" },
+      { key: "search", label: "Search" },
+      { key: "plugins", label: "Plugins" },
+      { key: "automations", label: "Automations" },
+    ];
+
+    document.getElementById(STYLE_ID)?.remove();
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+      [${ATTR}="group"] {
+        width: 100% !important;
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        column-gap: var(--spacing-2, 0.5rem) !important;
+        row-gap: var(--spacing-2, 0.5rem) !important;
+      }
+
+      [${ATTR}="button"] {
+        display: flex !important;
+        width: 100% !important;
+        min-width: 0 !important;
+        min-height: calc(var(--spacing-token-button-composer, 2rem) * 2.15) !important;
+        color: var(--color-token-text-primary) !important;
+        border: 1px solid color-mix(in srgb, currentColor 14%, transparent) !important;
+        border-radius: var(--radius-lg, 0.5rem) !important;
+        background-color: color-mix(in srgb, currentColor 5%, transparent) !important;
+        align-items: flex-start !important;
+        justify-content: center !important;
+        flex-direction: column !important;
+        text-align: left !important;
+        gap: var(--spacing-1, 0.25rem) !important;
+        overflow: hidden !important;
+      }
+
+      [${ATTR}="button"]:hover {
+        background-color: color-mix(in srgb, currentColor 9%, transparent) !important;
+      }
+
+      [${ATTR}="button"] > * {
+        min-width: 0;
+      }
+
+      [${ATTR}="button"] svg {
+        flex-shrink: 0;
+      }
+
+      [${ATTR}="label"] {
+        display: block !important;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      [${ATTR}="button"] kbd,
+      [${ATTR}="button"] [class*="shortcut" i] {
+        display: none !important;
+      }
+
+      [${ATTR}="original"] {
+        display: none !important;
+      }
+    `;
+    document.head.appendChild(style);
+
+    const marked = new Set();
+    let wrapper = null;
+    let activeOriginals = [];
+
+    const clearStaleNodes = () => {
+      document.querySelectorAll(`[${ATTR}="group"]`).forEach((node) => {
+        if (
+          node !== wrapper &&
+          (!marked.has(node) || node.dataset.codexppSidebarActionOwned === "true")
+        ) {
+          node.remove();
+        }
+      });
+      document.querySelectorAll(
+        `[${ATTR}="original"], [${ATTR}="source"], [${ATTR}="source-original"], [${ATTR}="overlay"]`,
+      ).forEach((node) => {
+        node.removeAttribute(ATTR);
+        if (node.dataset.codexppSidebarActionPrevClass !== undefined) {
+          node.className = node.dataset.codexppSidebarActionPrevClass;
+          delete node.dataset.codexppSidebarActionPrevClass;
+        }
+        if (node.dataset.codexppSidebarActionPrevStyle !== undefined) {
+          node.style.cssText = node.dataset.codexppSidebarActionPrevStyle;
+          delete node.dataset.codexppSidebarActionPrevStyle;
+        }
+      });
+    };
+
+    const cleanupMarks = () => {
+      for (const node of marked) {
+        node.removeAttribute(ATTR);
+        if (node.dataset.codexppSidebarActionPrevClass !== undefined) {
+          node.className = node.dataset.codexppSidebarActionPrevClass;
+          delete node.dataset.codexppSidebarActionPrevClass;
+        }
+        if (node.dataset.codexppSidebarActionPrevStyle !== undefined) {
+          node.style.cssText = node.dataset.codexppSidebarActionPrevStyle;
+          delete node.dataset.codexppSidebarActionPrevStyle;
+        }
+      }
+      marked.clear();
+    };
+
+    const removeWrapper = () => {
+      wrapper?.remove();
+      wrapper = null;
+      activeOriginals = [];
+    };
+
+    const normalize = (value) =>
+      (value || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+    const buttonLabel = (node) =>
+      normalize(node.getAttribute("aria-label") || node.textContent || "")
+        .replace(/\s*[⌘⇧⌥⌃^].*$/, "")
+        .trim();
+
+    const isCompositeActionText = (node) => {
+      const text = normalize(node.textContent || "");
+      let count = 0;
+      for (const action of actions) {
+        if (text.includes(action.key)) count += 1;
+      }
+      return count > 1;
+    };
+
+    const findMainSidebar = () => {
+      const aside = document.querySelector(
+        "aside.pointer-events-auto.relative.flex.overflow-hidden",
+      );
+      if (aside instanceof HTMLElement) return aside;
+      return null;
+    };
+
+    const findActionButtons = (options = {}) => {
+      const sidebar = findMainSidebar();
+      if (!sidebar) return null;
+      const candidates = Array.from(sidebar.querySelectorAll("button, a"))
+        .filter(
+          (node) =>
+            node instanceof HTMLElement &&
+            (options.includeHiddenSource ||
+              !node.closest(`[${ATTR}]`)) &&
+            node.getAttribute(ATTR) !== "original" &&
+            !isCompositeActionText(node),
+        );
+      const byLabel = new Map();
+      for (const node of candidates) {
+        const label = buttonLabel(node);
+        if (actions.some((action) => action.key === label) && !byLabel.has(label)) {
+          byLabel.set(label, node);
+        }
+      }
+      if (actions.some((action) => !byLabel.has(action.key))) return null;
+      return actions.map((action) => ({
+        ...action,
+        original: byLabel.get(action.key),
+      }));
+    };
+
+    const commonAncestor = (nodes) => {
+      if (!nodes.length) return null;
+      const chain = [];
+      for (let node = nodes[0]; node; node = node.parentElement) {
+        chain.push(node);
+      }
+      return chain.find((node) => nodes.every((target) => node.contains(target)));
+    };
+
+    const markNode = (node, value) => {
+      if (!marked.has(node)) {
+        node.dataset.codexppSidebarActionPrevClass = node.className || "";
+        node.dataset.codexppSidebarActionPrevStyle = node.style.cssText || "";
+        marked.add(node);
+      }
+      node.setAttribute(ATTR, value);
+    };
+
+    const findFullWidthMount = (sidebar, originals) => {
+      const common = commonAncestor(originals);
+      if (!(common instanceof HTMLElement)) return sidebar;
+
+      const sidebarWidth = sidebar.getBoundingClientRect().width;
+      let mount = common;
+      while (
+        mount.parentElement &&
+        mount.parentElement !== sidebar &&
+        mount.getBoundingClientRect().width < sidebarWidth * 0.7
+      ) {
+        mount = mount.parentElement;
+      }
+      return mount;
+    };
+
+    const createProxyButton = (action) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `${BUTTON_CLASS.replace(/\bflex\b/g, "").trim()} relative`;
+      btn.setAttribute(ATTR, "button");
+      btn.setAttribute("aria-label", action.label);
+      btn.style.setProperty("display", "block", "important");
+      btn.style.setProperty("width", "100%", "important");
+      btn.style.setProperty("text-align", "left", "important");
+
+      const iconWrap = document.createElement("div");
+      iconWrap.className = "mb-1 h-5 w-5 text-token-text-secondary";
+      iconWrap.style.setProperty("display", "block", "important");
+      iconWrap.style.setProperty("width", "1.25rem", "important");
+      iconWrap.style.setProperty("height", "1.25rem", "important");
+
+      const icon = action.original.querySelector("svg")?.cloneNode(true);
+      if (icon instanceof SVGElement) {
+        icon.classList.add("icon-sm", "shrink-0", "text-token-text-secondary");
+        icon.setAttribute("aria-hidden", "true");
+        icon.removeAttribute("aria-label");
+        icon.style.setProperty("display", "block", "important");
+        iconWrap.appendChild(icon);
+      }
+
+      const text = document.createElement("div");
+      text.setAttribute(ATTR, "label");
+      text.className = "min-w-0 max-w-full truncate leading-tight";
+      text.style.setProperty("display", "block", "important");
+      text.style.setProperty("width", "100%", "important");
+      text.textContent = action.label;
+      btn.append(iconWrap, text);
+
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const live = findActionButtons({ includeHiddenSource: true })
+          ?.find((candidate) => candidate.key === action.key)
+          ?.original;
+        activateOriginal(live || action.original);
+      });
+
+      return btn;
+    };
+
+    const activateOriginal = (original) => {
+      if (!(original instanceof HTMLElement)) return;
+      original.click();
+      original.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, cancelable: true }),
+      );
+      original.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
+      );
+      original.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, cancelable: true }),
+      );
+      original.dispatchEvent(
+        new MouseEvent("mouseup", { bubbles: true, cancelable: true }),
+      );
+      original.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    };
+
+    const sourceHideTarget = (original) => {
+      let node = original;
+      while (
+        node.parentElement &&
+        node.parentElement !== wrapper &&
+        node.parentElement.childElementCount === 1
+      ) {
+        node = node.parentElement;
+      }
+      return node;
+    };
+
+    const hideOriginals = (originals) => {
+      for (const original of originals) {
+        const target = sourceHideTarget(original);
+        markNode(target, "source-original");
+        target.style.setProperty("display", "none", "important");
+      }
+    };
+
+    const stackOriginalButtonContent = (button) => {
+      for (const node of button.querySelectorAll("kbd")) {
+        if (node instanceof HTMLElement) {
+          markNode(node, "shortcut");
+          node.style.setProperty("display", "none", "important");
+        }
+      }
+
+      const content =
+        Array.from(button.children).find(
+          (child) =>
+            child instanceof HTMLElement &&
+            child.querySelector("svg") &&
+            normalize(child.textContent || ""),
+        ) || button;
+
+      if (content instanceof HTMLElement) {
+        if (content !== button) markNode(content, "content");
+        content.style.setProperty("display", "flex", "important");
+        content.style.setProperty("flex-direction", "column", "important");
+        content.style.setProperty("align-items", "flex-start", "important");
+        content.style.setProperty("justify-content", "center", "important");
+        content.style.setProperty("gap", "var(--spacing-1, 0.25rem)", "important");
+        content.style.setProperty("width", "100%", "important");
+        content.style.setProperty("min-width", "0", "important");
+        content.style.setProperty("text-align", "left", "important");
+      }
+
+      const icon = button.querySelector("svg");
+      if (icon instanceof SVGElement) {
+        icon.style.setProperty("display", "block", "important");
+        icon.style.setProperty("flex-shrink", "0", "important");
+      }
+    };
+
+    const apply = () => {
+      clearStaleNodes();
+
+      const sidebar = findMainSidebar();
+      if (!sidebar) return;
+
+      const actionButtons = findActionButtons();
+      if (!actionButtons) return;
+      const originals = actionButtons.map((action) => action.original);
+
+      cleanupMarks();
+      removeWrapper();
+
+      const group = commonAncestor(originals);
+      if (!(group instanceof HTMLElement)) return;
+
+      markNode(group, "group");
+      group.classList.add(...WRAPPER_CLASS.split(/\s+/).filter(Boolean));
+
+      for (const action of actionButtons) {
+        const original = action.original;
+        markNode(original, "button");
+        original.classList.add(
+          ...BUTTON_CLASS.replace(/\brelative\b/g, "")
+            .split(/\s+/)
+            .filter(Boolean),
+        );
+        original.style.setProperty("display", "flex", "important");
+        original.style.setProperty(
+          "border",
+          "1px solid color-mix(in srgb, currentColor 14%, transparent)",
+          "important",
+        );
+        original.style.setProperty(
+          "background-color",
+          "color-mix(in srgb, currentColor 5%, transparent)",
+          "important",
+        );
+        original.style.setProperty("flex-direction", "column", "important");
+        original.style.setProperty("align-items", "flex-start", "important");
+        original.style.setProperty("justify-content", "center", "important");
+        stackOriginalButtonContent(original);
+      }
+      activeOriginals = originals;
+    };
+
+    let scheduled = false;
+    const scheduleApply = () => {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        apply();
+      });
+    };
+
+    clearStaleNodes();
+    scheduleApply();
+    const obs = new MutationObserver(scheduleApply);
+    obs.observe(document.body, { childList: true, subtree: true });
+
+    api.log.info("sidebar action grid active");
+
+    return () => {
+      obs.disconnect();
+      removeWrapper();
+      cleanupMarks();
       style.remove();
     };
   },
