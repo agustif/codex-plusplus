@@ -7,8 +7,9 @@
  * We are in CJS land here (matches Electron's main process and Codex's own
  * code). The renderer-side runtime is bundled separately into preload.js.
  */
-import { app, BrowserWindow, clipboard, ipcMain, session, shell, webContents } from "electron";
+import { app, BrowserView, BrowserWindow, clipboard, ipcMain, session, shell, webContents } from "electron";
 import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import chokidar from "chokidar";
 import { discoverTweaks, type DiscoveredTweak } from "./tweak-discovery";
@@ -28,8 +29,12 @@ const TWEAKS_DIR = join(userRoot, "tweaks");
 const LOG_DIR = join(userRoot, "log");
 const LOG_FILE = join(LOG_DIR, "main.log");
 const CONFIG_FILE = join(userRoot, "config.json");
-const CODEX_PLUSPLUS_VERSION = "0.1.0";
+const INSTALLER_STATE_FILE = join(userRoot, "state.json");
+const UPDATE_MODE_FILE = join(userRoot, "update-mode.json");
+const SIGNED_CODEX_BACKUP = join(userRoot, "backup", "Codex.app");
+const CODEX_PLUSPLUS_VERSION = "0.1.1";
 const CODEX_PLUSPLUS_REPO = "b-nnett/codex-plusplus";
+const CODEX_WINDOW_SERVICES_KEY = "__codexpp_window_services__";
 
 mkdirSync(LOG_DIR, { recursive: true });
 mkdirSync(TWEAKS_DIR, { recursive: true });
@@ -116,6 +121,19 @@ function setTweakEnabled(id: string, enabled: boolean): void {
   writeState(s);
 }
 
+interface InstallerState {
+  appRoot: string;
+  codexVersion: string | null;
+}
+
+function readInstallerState(): InstallerState | null {
+  try {
+    return JSON.parse(readFileSync(INSTALLER_STATE_FILE, "utf8")) as InstallerState;
+  } catch {
+    return null;
+  }
+}
+
 function log(level: "info" | "warn" | "error", ...args: unknown[]): void {
   const line = `[${new Date().toISOString()}] [${level}] ${args
     .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
@@ -126,6 +144,106 @@ function log(level: "info" | "warn" | "error", ...args: unknown[]): void {
   if (level === "error") console.error("[codex-plusplus]", ...args);
 }
 
+function installSparkleUpdateHook(): void {
+  if (process.platform !== "darwin") return;
+
+  const Module = require("node:module") as typeof import("node:module") & {
+    _load?: (request: string, parent: unknown, isMain: boolean) => unknown;
+  };
+  const originalLoad = Module._load;
+  if (typeof originalLoad !== "function") return;
+
+  Module._load = function codexPlusPlusModuleLoad(request: string, parent: unknown, isMain: boolean) {
+    const loaded = originalLoad.apply(this, [request, parent, isMain]) as unknown;
+    if (typeof request === "string" && /sparkle(?:\.node)?$/i.test(request)) {
+      wrapSparkleExports(loaded);
+    }
+    return loaded;
+  };
+}
+
+function wrapSparkleExports(loaded: unknown): void {
+  if (!loaded || typeof loaded !== "object") return;
+  const exports = loaded as Record<string, unknown> & { __codexppSparkleWrapped?: boolean };
+  if (exports.__codexppSparkleWrapped) return;
+  exports.__codexppSparkleWrapped = true;
+
+  for (const name of ["installUpdatesIfAvailable"]) {
+    const fn = exports[name];
+    if (typeof fn !== "function") continue;
+    exports[name] = function codexPlusPlusSparkleWrapper(this: unknown, ...args: unknown[]) {
+      prepareSignedCodexForSparkleInstall();
+      return Reflect.apply(fn, this, args);
+    };
+  }
+
+  if (exports.default && exports.default !== exports) {
+    wrapSparkleExports(exports.default);
+  }
+}
+
+function prepareSignedCodexForSparkleInstall(): void {
+  if (process.platform !== "darwin") return;
+  if (existsSync(UPDATE_MODE_FILE)) {
+    log("info", "Sparkle update prep skipped; update mode already active");
+    return;
+  }
+  if (!existsSync(SIGNED_CODEX_BACKUP)) {
+    log("warn", "Sparkle update prep skipped; signed Codex.app backup is missing");
+    return;
+  }
+  if (!isDeveloperIdSignedApp(SIGNED_CODEX_BACKUP)) {
+    log("warn", "Sparkle update prep skipped; Codex.app backup is not Developer ID signed");
+    return;
+  }
+
+  const state = readInstallerState();
+  const appRoot = state?.appRoot ?? inferMacAppRoot();
+  if (!appRoot) {
+    log("warn", "Sparkle update prep skipped; could not infer Codex.app path");
+    return;
+  }
+
+  const mode = {
+    enabledAt: new Date().toISOString(),
+    appRoot,
+    codexVersion: state?.codexVersion ?? null,
+  };
+  writeFileSync(UPDATE_MODE_FILE, JSON.stringify(mode, null, 2));
+
+  try {
+    execFileSync("ditto", [SIGNED_CODEX_BACKUP, appRoot], { stdio: "ignore" });
+    try {
+      execFileSync("xattr", ["-dr", "com.apple.quarantine", appRoot], { stdio: "ignore" });
+    } catch {}
+    log("info", "Restored signed Codex.app before Sparkle install", { appRoot });
+  } catch (e) {
+    log("error", "Failed to restore signed Codex.app before Sparkle install", {
+      message: (e as Error).message,
+    });
+  }
+}
+
+function isDeveloperIdSignedApp(appRoot: string): boolean {
+  const result = spawnSync("codesign", ["-dv", "--verbose=4", appRoot], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  return (
+    result.status === 0 &&
+    /Authority=Developer ID Application:/.test(output) &&
+    !/Signature=adhoc/.test(output) &&
+    !/TeamIdentifier=not set/.test(output)
+  );
+}
+
+function inferMacAppRoot(): string | null {
+  const marker = ".app/Contents/MacOS/";
+  const idx = process.execPath.indexOf(marker);
+  return idx >= 0 ? process.execPath.slice(0, idx + ".app".length) : null;
+}
+
 // Surface unhandled errors from anywhere in the main process to our log.
 process.on("uncaughtException", (e: Error & { code?: string }) => {
   log("error", "uncaughtException", { code: e.code, message: e.message, stack: e.stack });
@@ -134,9 +252,52 @@ process.on("unhandledRejection", (e) => {
   log("error", "unhandledRejection", { value: String(e) });
 });
 
+installSparkleUpdateHook();
+
 interface LoadedMainTweak {
   stop?: () => void;
   storage: DiskStorage;
+}
+
+interface CodexWindowServices {
+  createFreshLocalWindow?: (route?: string) => Promise<Electron.BrowserWindow | null>;
+  ensureHostWindow?: (hostId?: string) => Promise<Electron.BrowserWindow | null>;
+  getPrimaryWindow?: (hostId?: string) => Electron.BrowserWindow | null;
+  getContext?: (hostId: string) => { registerWindow?: (windowLike: CodexWindowLike) => void } | null;
+  windowManager?: {
+    createWindow?: (opts: Record<string, unknown>) => Promise<Electron.BrowserWindow | null>;
+    registerWindow?: (
+      windowLike: CodexWindowLike,
+      hostId: string,
+      primary: boolean,
+      appearance: string,
+    ) => void;
+    options?: {
+      allowDevtools?: boolean;
+      preloadPath?: string;
+    };
+  };
+}
+
+interface CodexWindowLike {
+  id: number;
+  webContents: Electron.WebContents;
+  on(event: "closed", listener: () => void): unknown;
+}
+
+interface CodexCreateWindowOptions {
+  route: string;
+  hostId?: string;
+  show?: boolean;
+  appearance?: string;
+  parentWindowId?: number;
+  bounds?: Electron.Rectangle;
+}
+
+interface CodexCreateViewOptions {
+  route: string;
+  hostId?: string;
+  appearance?: string;
 }
 
 const tweakState = {
@@ -452,6 +613,7 @@ function loadAllMainTweaks(): void {
           storage,
           ipc: makeMainIpc(t.manifest.id),
           fs: makeMainFs(t.manifest.id),
+          codex: makeCodexApi(),
         });
         tweakState.loadedMain.set(t.manifest.id, {
           stop: tweak.stop,
@@ -670,6 +832,125 @@ function makeMainFs(id: string) {
       }
     },
   };
+}
+
+function makeCodexApi() {
+  return {
+    createBrowserView: async (opts: CodexCreateViewOptions) => {
+      const services = getCodexWindowServices();
+      const windowManager = services?.windowManager;
+      if (!services || !windowManager?.registerWindow) {
+        throw new Error(
+          "Codex embedded view services are not available. Reinstall Codex++ 0.1.1 or later.",
+        );
+      }
+
+      const route = normalizeCodexRoute(opts.route);
+      const hostId = opts.hostId || "local";
+      const appearance = opts.appearance || "secondary";
+      const view = new BrowserView({
+        webPreferences: {
+          preload: windowManager.options?.preloadPath,
+          contextIsolation: true,
+          nodeIntegration: false,
+          spellcheck: false,
+          devTools: windowManager.options?.allowDevtools,
+        },
+      });
+      const windowLike = makeWindowLikeForView(view);
+      windowManager.registerWindow(windowLike, hostId, false, appearance);
+      services.getContext?.(hostId)?.registerWindow?.(windowLike);
+      await view.webContents.loadURL(codexAppUrl(route, hostId));
+      return view;
+    },
+
+    createWindow: async (opts: CodexCreateWindowOptions) => {
+      const services = getCodexWindowServices();
+      if (!services) {
+        throw new Error(
+          "Codex window services are not available. Reinstall Codex++ 0.1.1 or later.",
+        );
+      }
+
+      const route = normalizeCodexRoute(opts.route);
+      const hostId = opts.hostId || "local";
+      const parent = typeof opts.parentWindowId === "number"
+        ? BrowserWindow.fromId(opts.parentWindowId)
+        : BrowserWindow.getFocusedWindow();
+      const createWindow = services.windowManager?.createWindow;
+
+      let win: Electron.BrowserWindow | null | undefined;
+      if (typeof createWindow === "function") {
+        win = await createWindow.call(services.windowManager, {
+          initialRoute: route,
+          hostId,
+          show: opts.show !== false,
+          appearance: opts.appearance || "secondary",
+          parent,
+        });
+      } else if (hostId === "local" && typeof services.createFreshLocalWindow === "function") {
+        win = await services.createFreshLocalWindow(route);
+      } else if (typeof services.ensureHostWindow === "function") {
+        win = await services.ensureHostWindow(hostId);
+      }
+
+      if (!win || win.isDestroyed()) {
+        throw new Error("Codex did not return a window for the requested route");
+      }
+
+      if (opts.bounds) {
+        win.setBounds(opts.bounds);
+      }
+      if (parent && !parent.isDestroyed()) {
+        try {
+          win.setParentWindow(parent);
+        } catch {}
+      }
+      if (opts.show !== false) {
+        win.show();
+      }
+
+      return {
+        windowId: win.id,
+        webContentsId: win.webContents.id,
+      };
+    },
+  };
+}
+
+function makeWindowLikeForView(view: Electron.BrowserView): CodexWindowLike {
+  return {
+    id: view.webContents.id,
+    webContents: view.webContents,
+    on: (event: "closed", listener: () => void) => {
+      if (event === "closed") {
+        view.webContents.once("destroyed", listener);
+      }
+      return view;
+    },
+  };
+}
+
+function codexAppUrl(route: string, hostId: string): string {
+  const url = new URL("app://-/index.html");
+  url.searchParams.set("hostId", hostId);
+  if (route !== "/") url.searchParams.set("initialRoute", route);
+  return url.toString();
+}
+
+function getCodexWindowServices(): CodexWindowServices | null {
+  const services = (globalThis as unknown as Record<string, unknown>)[CODEX_WINDOW_SERVICES_KEY];
+  return services && typeof services === "object" ? (services as CodexWindowServices) : null;
+}
+
+function normalizeCodexRoute(route: string): string {
+  if (typeof route !== "string" || !route.startsWith("/")) {
+    throw new Error("Codex route must be an absolute app route");
+  }
+  if (route.includes("://") || route.includes("\n") || route.includes("\r")) {
+    throw new Error("Codex route must not include a protocol or control characters");
+  }
+  return route;
 }
 
 // Touch BrowserWindow to keep its import — older Electron lint rules.

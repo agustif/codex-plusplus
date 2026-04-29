@@ -77,6 +77,8 @@ export interface TweakApi {
   ipc: TweakIpc;
   /** Filesystem helpers, sandboxed to the tweak's data dir. */
   fs: TweakFs;
+  /** Main-only: native Codex integration points exposed by Codex++. */
+  codex?: CodexApi;
 }
 
 export interface TweakStorage {
@@ -178,6 +180,54 @@ export interface TweakFs {
   read(relPath: string): Promise<string>;
   write(relPath: string, contents: string): Promise<void>;
   exists(relPath: string): Promise<boolean>;
+}
+
+export interface CodexApi {
+  /**
+   * Main-only: create an embedded BrowserView registered with Codex's host
+   * context. The returned object is Electron's BrowserView in the main
+   * process, typed as unknown so renderer-only tweak bundles do not need
+   * Electron types.
+   */
+  createBrowserView(options: CodexCreateViewOptions): Promise<unknown>;
+
+  /**
+   * Create a Codex-registered native window for an in-app route.
+   *
+   * The returned window is registered with Codex's own host/app-server
+   * context, so routes such as `/local/<conversation-id>` render the native
+   * chat UI instead of a detached shell.
+   */
+  createWindow(options: CodexCreateWindowOptions): Promise<CodexWindowRef>;
+}
+
+export interface CodexCreateWindowOptions {
+  /** Absolute Codex route, e.g. `/local/<conversation-id>` or `/`. */
+  route: string;
+  /** Host id. Defaults to `local`. */
+  hostId?: string;
+  /** Show the window after creating it. Defaults to true. */
+  show?: boolean;
+  /** Native Codex window appearance. Defaults to `secondary`. */
+  appearance?: string;
+  /** Parent BrowserWindow id. Defaults to the focused window when available. */
+  parentWindowId?: number;
+  /** Optional initial bounds in screen coordinates. */
+  bounds?: { x: number; y: number; width: number; height: number };
+}
+
+export interface CodexCreateViewOptions {
+  /** Absolute Codex route, e.g. `/local/<conversation-id>` or `/`. */
+  route: string;
+  /** Host id. Defaults to `local`. */
+  hostId?: string;
+  /** Native Codex appearance token used for registration. */
+  appearance?: string;
+}
+
+export interface CodexWindowRef {
+  windowId: number;
+  webContentsId: number;
 }
 
 /** Helper to give authors type inference without `satisfies`. */

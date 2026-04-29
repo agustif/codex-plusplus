@@ -4,6 +4,12 @@ All notable changes to codex-plusplus are documented here.
 
 This project uses semver for the installer, runtime, SDK, and published CLI package. Tweak authors should also use semver release tags so the manager can compare installed and available versions.
 
+## 0.1.1
+
+- Added a native Codex window bridge for main-scope tweaks.
+- Tweaks can now create Codex-registered chat windows for routes such as `/local/<conversation-id>`, which enables split-screen chat tweaks to render the real Codex chat UI instead of transcript clones or unregistered BrowserViews.
+- The installer now exposes Codex's internal window services to the Codex++ runtime during asar patching.
+
 ## 0.1.0
 
 - Initial alpha release.

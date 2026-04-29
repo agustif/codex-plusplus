@@ -1,5 +1,6 @@
 import kleur from "kleur";
-import { cpSync, existsSync, readFileSync, writeFileSync, mkdirSync, openSync, closeSync, unlinkSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { cpSync, existsSync, readFileSync, writeFileSync, mkdirSync, openSync, closeSync, unlinkSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { locateCodex } from "../platform.js";
@@ -7,7 +8,7 @@ import { ensureUserPaths } from "../paths.js";
 import { backupOnce, patchAsar, readHeaderHash } from "../asar.js";
 import { setIntegrity, getIntegrity } from "../integrity.js";
 import { writeFuse } from "../fuses.js";
-import { adHocSign, clearQuarantine } from "../codesign.js";
+import { adHocSign, clearQuarantine, signatureInfo } from "../codesign.js";
 import { readPlist } from "../plist.js";
 import { writeState } from "../state.js";
 import { installWatcher, type WatcherKind } from "../watcher.js";
@@ -36,11 +37,12 @@ export async function install(opts: Opts = {}): Promise<void> {
   const step = makeStepper(opts.quiet === true);
   const codex = locateCodex(opts.app);
   step(`Located Codex at ${kleur.cyan(codex.appRoot)}`);
+  preflightSystemTools(codex.platform, resign, codex.metaPath !== null);
 
   // Pre-flight: try to create+remove a probe file inside the app bundle. This
   // surfaces macOS App Management TCC denials BEFORE we touch anything, and
   // also tickles the system into showing the permission prompt on first run.
-  preflightWritable(codex.appRoot);
+  preflightWritable(codex.resourcesDir, codex.platform);
   step("Bundle is writable");
 
   const codexVersion = readCodexVersion(codex.metaPath);
@@ -50,10 +52,12 @@ export async function install(opts: Opts = {}): Promise<void> {
   step(`User dir: ${kleur.cyan(paths.root)}`);
 
   // 1. Backup originals.
+  const pristineAppBackup = codex.platform === "darwin" ? join(paths.backup, "Codex.app") : null;
   const backupAsar = join(paths.backup, "app.asar");
   const backupAsarUnpacked = join(paths.backup, "app.asar.unpacked");
   const backupPlist = codex.metaPath ? join(paths.backup, "Info.plist") : null;
   const backupFramework = join(paths.backup, "Electron Framework");
+  if (pristineAppBackup) backupPristineApp(codex.appRoot, pristineAppBackup, step);
   backupOnce(codex.asarPath, backupAsar);
   if (existsSync(`${codex.asarPath}.unpacked`)) {
     backupOnce(`${codex.asarPath}.unpacked`, backupAsarUnpacked);
@@ -143,7 +147,7 @@ export async function install(opts: Opts = {}): Promise<void> {
   }
 }
 
-function readCodexVersion(metaPath: string | null): string | null {
+export function readCodexVersion(metaPath: string | null): string | null {
   if (!metaPath || !existsSync(metaPath)) return null;
   try {
     const pl = readPlist(metaPath);
@@ -151,6 +155,15 @@ function readCodexVersion(metaPath: string | null): string | null {
   } catch {
     return null;
   }
+}
+
+function backupPristineApp(appRoot: string, backupPath: string, step: (msg: string) => void): void {
+  const sig = signatureInfo(appRoot);
+  if (!sig.ok || sig.adHoc || !sig.teamIdentifier) return;
+
+  rmSync(backupPath, { recursive: true, force: true });
+  execFileSync("ditto", [appRoot, backupPath], { stdio: "ignore" });
+  step(`Backed up signed Codex.app to ${kleur.cyan(backupPath)}`);
 }
 
 /**
@@ -193,8 +206,59 @@ async function injectLoader(asarPath: string, userRoot: string): Promise<string>
     } else {
       cpSync(loaderSrc, join(dir, "codex-plusplus-loader.cjs"));
     }
+
+    patchCodexWindowServices(dir, originalMain);
   });
   return originalMain;
+}
+
+function patchCodexWindowServices(appDir: string, originalMain: string): void {
+  const marker = "__codexpp_window_services__";
+  const candidates = findCodexMainCandidates(appDir, originalMain);
+
+  for (const mainPath of candidates) {
+    const source = readFileSync(mainPath, "utf8");
+    if (source.includes(marker)) return;
+
+    const callNeedle = "=ww({buildFlavor:";
+    const callIndex = source.indexOf(callNeedle);
+    if (callIndex < 1) continue;
+
+    let nameStart = callIndex - 1;
+    while (nameStart > 0 && /[$A-Za-z0-9_]/.test(source[nameStart - 1] ?? "")) {
+      nameStart -= 1;
+    }
+    const serviceVar = source.slice(nameStart, callIndex);
+    if (!/^[$A-Za-z_][$A-Za-z0-9_]*$/.test(serviceVar)) {
+      throw new Error("Codex window services variable could not be identified");
+    }
+
+    const afterCallNeedle = "});jb({buildFlavor:";
+    const afterCallIndex = source.indexOf(afterCallNeedle, callIndex);
+    if (afterCallIndex < 0) {
+      throw new Error("Codex window services hook insertion point not found");
+    }
+
+    const patched =
+      source.slice(0, afterCallIndex + 2) +
+      `;globalThis.${marker}=${serviceVar}` +
+      source.slice(afterCallIndex + 2);
+    writeFileSync(mainPath, patched);
+    return;
+  }
+
+  throw new Error("Codex window services hook point not found");
+}
+
+function findCodexMainCandidates(appDir: string, originalMain: string): string[] {
+  const out = [resolve(appDir, originalMain)];
+  const buildDir = resolve(appDir, ".vite", "build");
+  try {
+    for (const name of readdirSync(buildDir)) {
+      if (/^main-.*\.js$/.test(name)) out.push(resolve(buildDir, name));
+    }
+  } catch {}
+  return [...new Set(out)].filter((p) => existsSync(p));
 }
 
 export function stageAssets(runtimeDir: string): void {
@@ -227,8 +291,8 @@ function makeStepper(quiet = false) {
  * Touch a probe file inside the app bundle to surface (and trigger) macOS
  * App Management TCC denials before we begin destructive work.
  */
-function preflightWritable(appRoot: string): void {
-  const probe = join(appRoot, "Contents", ".codexpp-write-probe");
+function preflightWritable(targetDir: string, platform: string): void {
+  const probe = join(targetDir, ".codexpp-write-probe");
   try {
     const fd = openSync(probe, "w");
     closeSync(fd);
@@ -236,9 +300,9 @@ function preflightWritable(appRoot: string): void {
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
     if (err.code === "EPERM" || err.code === "EACCES") {
-      const inApps = appRoot.startsWith("/Applications/");
+      const inApps = platform === "darwin" && targetDir.startsWith("/Applications/");
       const msg =
-        `Cannot write to ${appRoot}.\n\n` +
+        `Cannot write to ${targetDir}.\n\n` +
         (inApps
           ? `macOS App Management is blocking modification of /Applications/Codex.app.\n` +
             `Fix:\n` +
@@ -246,10 +310,25 @@ function preflightWritable(appRoot: string): void {
             `  2. Enable the toggle for your terminal app (Terminal, iTerm2, etc.)\n` +
             `  3. Re-run this command.\n\n` +
             `(If macOS just showed a permission dialog, click Allow and re-run.)\n`
-          : `Check filesystem permissions on the bundle.\n`) +
+          : `Check filesystem permissions for the Codex install folder.\n`) +
         `\nOriginal error: ${err.message}`;
       throw new Error(msg);
     }
     throw e;
+  }
+}
+
+function preflightSystemTools(platform: string, resign: boolean, hasPlist: boolean): void {
+  if (platform !== "darwin") return;
+  if (resign) requireCommand("codesign", "macOS codesign is required to re-sign Codex.app after patching.");
+  if (hasPlist) requireCommand("plutil", "macOS plutil is required to update Codex.app's Info.plist.");
+}
+
+function requireCommand(command: string, message: string): void {
+  const result = spawnSync("/bin/sh", ["-c", `command -v ${command}`], {
+    stdio: "ignore",
+  });
+  if (result.status !== 0) {
+    throw new Error(`[!] ${command} not installed\n\n${message}\nPaste this error into Codex if you need help.`);
   }
 }
