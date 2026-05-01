@@ -14,6 +14,7 @@ import { installReactHook } from "./react-hook";
 import { startSettingsInjector } from "./settings-injector";
 import { startTweakHost, teardownTweakHost } from "./tweak-host";
 import { mountManager } from "./manager";
+import { startGoalFeature } from "./goal-feature";
 
 // File-log preload progress so we can diagnose without DevTools. Best-effort:
 // failures here must never throw because we'd take the page down with us.
@@ -47,6 +48,12 @@ try {
   fileLog("react hook installed");
 } catch (e) {
   fileLog("react hook FAILED", String(e));
+}
+
+try {
+  startGoalFeature(fileLog);
+} catch (e) {
+  fileLog("goal feature FAILED", String(e));
 }
 
 queueMicrotask(() => {

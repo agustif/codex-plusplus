@@ -15,6 +15,7 @@ const react_hook_1 = require("./react-hook");
 const settings_injector_1 = require("./settings-injector");
 const tweak_host_1 = require("./tweak-host");
 const manager_1 = require("./manager");
+const goal_feature_1 = require("./goal-feature");
 // File-log preload progress so we can diagnose without DevTools. Best-effort:
 // failures here must never throw because we'd take the page down with us.
 //
@@ -47,6 +48,12 @@ try {
 }
 catch (e) {
     fileLog("react hook FAILED", String(e));
+}
+try {
+    (0, goal_feature_1.startGoalFeature)(fileLog);
+}
+catch (e) {
+    fileLog("goal feature FAILED", String(e));
 }
 queueMicrotask(() => {
     if (document.readyState === "loading") {
