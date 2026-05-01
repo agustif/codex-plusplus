@@ -17,6 +17,7 @@ import { discoverTweaks, type DiscoveredTweak } from "./tweak-discovery";
 import { createDiskStorage, type DiskStorage } from "./storage";
 import { syncManagedMcpServers } from "./mcp-sync";
 import { getWatcherHealth } from "./watcher-health";
+import { createGitMetadataProvider } from "./git-metadata";
 import {
   isMainProcessTweakScope,
   reloadTweaks,
@@ -496,6 +497,7 @@ const tweakState = {
   discovered: [] as DiscoveredTweak[],
   loadedMain: new Map<string, LoadedMainTweak>(),
 };
+const gitMetadataProvider = createGitMetadataProvider();
 
 const tweakLifecycleDeps = {
   logInfo: (message: string) => log("info", message),
@@ -723,6 +725,19 @@ ipcMain.handle("codexpp:user-paths", () => ({
   logDir: LOG_DIR,
 }));
 
+ipcMain.handle("codexpp:git-resolve-repository", (_e, path: string) =>
+  gitMetadataProvider.resolveRepository(path),
+);
+ipcMain.handle("codexpp:git-status", (_e, path: string) =>
+  gitMetadataProvider.getStatus(path),
+);
+ipcMain.handle("codexpp:git-diff-summary", (_e, path: string) =>
+  gitMetadataProvider.getDiffSummary(path),
+);
+ipcMain.handle("codexpp:git-worktrees", (_e, path: string) =>
+  gitMetadataProvider.getWorktrees(path),
+);
+
 ipcMain.handle("codexpp:reveal", (_e, p: string) => {
   shell.openPath(p).catch(() => {});
 });
@@ -826,6 +841,7 @@ function loadAllMainTweaks(): void {
           storage,
           ipc: makeMainIpc(t.manifest.id),
           fs: makeMainFs(t.manifest.id),
+          git: gitMetadataProvider,
           codex: makeCodexApi(),
         });
         tweakState.loadedMain.set(t.manifest.id, {

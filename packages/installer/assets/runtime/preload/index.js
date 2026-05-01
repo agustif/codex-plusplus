@@ -16,6 +16,7 @@ const settings_injector_1 = require("./settings-injector");
 const tweak_host_1 = require("./tweak-host");
 const manager_1 = require("./manager");
 const goal_feature_1 = require("./goal-feature");
+const git_sidebar_1 = require("./git-sidebar");
 // File-log preload progress so we can diagnose without DevTools. Best-effort:
 // failures here must never throw because we'd take the page down with us.
 //
@@ -68,6 +69,8 @@ async function boot() {
     try {
         (0, settings_injector_1.startSettingsInjector)();
         fileLog("settings injector started");
+        (0, git_sidebar_1.startGitSidebar)();
+        fileLog("git sidebar started");
         await (0, tweak_host_1.startTweakHost)();
         fileLog("tweak host started");
         await (0, manager_1.mountManager)();

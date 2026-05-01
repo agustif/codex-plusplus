@@ -9,7 +9,7 @@ test("validateTweakManifest accepts a complete manifest", () => {
     version: "0.1.0",
     githubRepo: "example/tweak",
     scope: "both",
-    permissions: ["settings", "ipc", "filesystem"],
+    permissions: ["settings", "ipc", "filesystem", "git.metadata"],
   });
 
   assert.equal(result.ok, true);
