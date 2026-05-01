@@ -14,6 +14,28 @@ A tweak system for the [Codex](https://chatgpt.com/codex) desktop app. Inject cu
 
 Everything beyond the one-time install patch lives **outside** the app bundle, so iterating on tweaks is just save-and-reload.
 
+For runtime UI work, use the dev HMR loop:
+
+```sh
+codexplusplus dev-runtime --channel both
+```
+
+It rebuilds the Codex++ runtime, stages it into Stable/Beta Codex++ homes, and reloads open Codex renderer windows when the preload bundle changes. For main-process runtime edits, including the HMR watcher itself, use:
+
+```sh
+codexplusplus dev-runtime --channel both --restart
+```
+
+That path backs up the previous runtime bundle, stages the candidate, restarts Codex with CDP enabled, checks `/json/version`, and restores the previous runtime if the candidate fails to come up.
+
+For the full ouroboros experiment, expose repo-wide self-modification tools to Codex:
+
+```sh
+codexplusplus self-tools --root /path/to/codex-plusplus
+```
+
+This writes a managed `codexpp-self` MCP launcher into `~/.codex/config.toml`. The server can list/search/read/write the configured root, apply git diffs, run shell commands from the root, invoke the runtime apply/restart path above, and restart its own worker so modified self-tool code becomes active.
+
 ## Install
 
 Homebrew:

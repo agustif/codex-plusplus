@@ -789,6 +789,8 @@ ipcMain.handle("codexpp:reload-tweaks", () => {
 //    restart and broadcast `codexpp:tweaks-changed` to every renderer so it
 //    can re-init its host.
 const RELOAD_DEBOUNCE_MS = 250;
+const RUNTIME_PRELOAD_RELOAD_DEBOUNCE_MS = 180;
+const RUNTIME_PRELOAD_RELOAD_MARKER = join(runtimeDir, ".codexpp-runtime-reload");
 let reloadTimer: NodeJS.Timeout | null = null;
 function scheduleReload(reason: string): void {
   if (reloadTimer) clearTimeout(reloadTimer);
@@ -814,6 +816,53 @@ try {
 } catch (e) {
   log("error", "failed to start watcher:", e);
 }
+
+// 5. Runtime preload HMR.
+//    The main-process runtime cannot safely replace itself after it has been
+//    require()d by Electron, but renderer-side runtime features live in the
+//    preload bundle. When a dev command stages a fresh preload.js, reload app
+//    renderers in-place so the next preload execution picks up the new code.
+let runtimePreloadReloadTimer: NodeJS.Timeout | null = null;
+function scheduleRuntimePreloadReload(reason: string): void {
+  if (runtimePreloadReloadTimer) clearTimeout(runtimePreloadReloadTimer);
+  runtimePreloadReloadTimer = setTimeout(() => {
+    runtimePreloadReloadTimer = null;
+    reloadRendererWindows(reason);
+  }, RUNTIME_PRELOAD_RELOAD_DEBOUNCE_MS);
+}
+
+function startRuntimePreloadWatcher(): void {
+  try {
+    const watcher = chokidar.watch([PRELOAD_PATH, RUNTIME_PRELOAD_RELOAD_MARKER], {
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 },
+    });
+    watcher.on("all", (event, path) => scheduleRuntimePreloadReload(`${event} ${path}`));
+    watcher.on("error", (e) => log("warn", "runtime preload watcher error:", e));
+    log("info", "watching runtime preload for HMR", PRELOAD_PATH);
+    app.on("will-quit", () => watcher.close().catch(() => {}));
+  } catch (e) {
+    log("warn", "failed to start runtime preload watcher:", e);
+  }
+}
+
+function reloadRendererWindows(reason: string): void {
+  let count = 0;
+  for (const wc of webContents.getAllWebContents()) {
+    try {
+      if (wc.isDestroyed()) continue;
+      const url = wc.getURL();
+      if (!url.startsWith("app://")) continue;
+      wc.reloadIgnoringCache();
+      count++;
+    } catch (e) {
+      log("warn", "runtime preload reload failed for a renderer:", e);
+    }
+  }
+  log("info", `runtime preload changed (${reason}); reloaded ${count} renderer(s)`);
+}
+
+startRuntimePreloadWatcher();
 
 // --- helpers ---
 

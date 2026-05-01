@@ -97,6 +97,24 @@ test("bundled filesystem watcher reload delegates to lifecycle helper", () => {
   assertCallOrder(body, ["reloadTweaks"]);
 });
 
+test("source runtime preload HMR reloads app renderers without restarting main", () => {
+  const body = extractFunctionBody(runtimeSource, "reloadRendererWindows");
+
+  assert.match(runtimeSource, /\.codexpp-runtime-reload/);
+  assert.match(extractFunctionBody(runtimeSource, "startRuntimePreloadWatcher"), /PRELOAD_PATH/);
+  assert.match(extractFunctionBody(runtimeSource, "startRuntimePreloadWatcher"), /RUNTIME_PRELOAD_RELOAD_MARKER/);
+  assertCallOrder(body, ["webContents.getAllWebContents", "reloadIgnoringCache"]);
+});
+
+test("bundled runtime preload HMR reloads app renderers without restarting main", () => {
+  const body = extractFunctionBody(bundledRuntime, "reloadRendererWindows");
+
+  assert.match(bundledRuntime, /\.codexpp-runtime-reload/);
+  assert.match(extractFunctionBody(bundledRuntime, "startRuntimePreloadWatcher"), /PRELOAD_PATH/);
+  assert.match(extractFunctionBody(bundledRuntime, "startRuntimePreloadWatcher"), /RUNTIME_PRELOAD_RELOAD_MARKER/);
+  assertCallOrder(body, ["webContents.getAllWebContents", "reloadIgnoringCache"]);
+});
+
 function extractHandlerBody(source: string, channel: string): string {
   const marker = `"${channel}"`;
   const markerIndex = source.indexOf(marker);

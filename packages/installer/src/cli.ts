@@ -11,6 +11,8 @@ import { doctor } from "./commands/doctor.js";
 import { createTweak } from "./commands/create-tweak.js";
 import { validateTweak } from "./commands/validate-tweak.js";
 import { devTweak } from "./commands/dev-tweak.js";
+import { devRuntime } from "./commands/dev-runtime.js";
+import { selfTools } from "./commands/self-tools.js";
 import { safeMode } from "./commands/safe-mode.js";
 import { CODEX_PLUSPLUS_VERSION } from "./version.js";
 import { buildCliFailureIssueUrl, showPatchFailedAlert } from "./alerts.js";
@@ -148,6 +150,27 @@ prog
   .option("--replace", "Replace an existing symlink at the target tweak id")
   .option("--no-watch", "Link once and exit instead of watching for changes")
   .action(wrap(devTweak));
+
+prog
+  .command("dev-runtime")
+  .describe("Build and stage Codex++ runtime changes into open Stable/Beta apps with renderer reloads")
+  .option("--channel", "Runtime home to update: auto, stable, beta, or both", "auto")
+  .option("--home", "Explicit Codex++ home directory; overrides --channel")
+  .option("--watch", "Watch runtime sources after the initial stage", true)
+  .option("--build", "Build runtime before staging", true)
+  .option("--restart", "Restart Codex after staging and verify CDP health; restores the previous runtime on failure")
+  .option("--quiet", "Suppress build/stage progress")
+  .action(wrap(devRuntime));
+
+prog
+  .command("self-tools")
+  .describe("Expose repo-wide Codex++ self-modification tools to Codex through MCP")
+  .option("--root", "Codebase root the MCP tools can inspect and modify", process.cwd())
+  .option("--name", "MCP server name", "codexpp-self")
+  .option("--config", "Codex config.toml path (default: ~/.codex/config.toml)")
+  .option("--disable", "Remove the Codex++ self MCP server block")
+  .option("--quiet", "Suppress progress output")
+  .action(wrap(selfTools));
 
 prog
   .command("safe-mode")
