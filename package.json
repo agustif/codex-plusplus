@@ -1,18 +1,18 @@
 {
   "name": "codex-plusplus",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "license": "MIT",
   "description": "Tweak system for the OpenAI Codex desktop app",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/b-nnett/codex-plusplus.git"
+    "url": "https://github.com/agustif/codex-plusplus.git"
   },
   "bugs": {
-    "url": "https://github.com/b-nnett/codex-plusplus/issues"
+    "url": "https://github.com/agustif/codex-plusplus/issues"
   },
-  "homepage": "https://github.com/b-nnett/codex-plusplus#readme",
+  "homepage": "https://github.com/agustif/codex-plusplus#readme",
   "workspaces": [
     "packages/*"
   ],

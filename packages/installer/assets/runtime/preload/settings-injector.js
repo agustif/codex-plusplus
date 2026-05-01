@@ -957,7 +957,7 @@ function reportBugRow() {
             "## Logs",
             "Attach relevant lines from the Codex++ log directory.",
         ].join("\n"));
-        void electron_1.ipcRenderer.invoke("codexpp:open-external", `https://github.com/b-nnett/codex-plusplus/issues/new?title=${title}&body=${body}`);
+        void electron_1.ipcRenderer.invoke("codexpp:open-external", `https://github.com/agustif/codex-plusplus/issues/new?title=${title}&body=${body}`);
     }));
     return row;
 }

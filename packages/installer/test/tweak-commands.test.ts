@@ -268,7 +268,7 @@ test("window services patch ignores unrelated buildFlavor factories", () => {
 test("patch failure report URL includes a prefilled GitHub issue", () => {
   const url = new URL(buildPatchFailureIssueUrl("Codex window services hook point not found"));
 
-  assert.equal(url.origin + url.pathname, "https://github.com/b-nnett/codex-plusplus/issues/new");
+  assert.equal(url.origin + url.pathname, "https://github.com/agustif/codex-plusplus/issues/new");
   assert.equal(url.searchParams.get("title"), "Codex++ failed to patch Codex after update");
   assert.match(url.searchParams.get("body") ?? "", /Codex window services hook point not found/);
   assert.match(url.searchParams.get("body") ?? "", /Platform:/);
@@ -277,7 +277,7 @@ test("patch failure report URL includes a prefilled GitHub issue", () => {
 test("CLI failure report URL includes command and environment details", () => {
   const url = new URL(buildCliFailureIssueUrl("install", "codesign not installed"));
 
-  assert.equal(url.origin + url.pathname, "https://github.com/b-nnett/codex-plusplus/issues/new");
+  assert.equal(url.origin + url.pathname, "https://github.com/agustif/codex-plusplus/issues/new");
   assert.equal(url.searchParams.get("title"), "Codex++ install failed");
   assert.match(url.searchParams.get("body") ?? "", /codexplusplus install/);
   assert.match(url.searchParams.get("body") ?? "", /codesign not installed/);

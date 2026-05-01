@@ -42,8 +42,8 @@ const CODEX_CONFIG_FILE = join(homedir(), ".codex", "config.toml");
 const INSTALLER_STATE_FILE = join(userRoot, "state.json");
 const UPDATE_MODE_FILE = join(userRoot, "update-mode.json");
 const SIGNED_CODEX_BACKUP = join(userRoot, "backup", "Codex.app");
-const CODEX_PLUSPLUS_VERSION = "0.1.3";
-const CODEX_PLUSPLUS_REPO = "b-nnett/codex-plusplus";
+const CODEX_PLUSPLUS_VERSION = "0.1.4";
+const CODEX_PLUSPLUS_REPO = "agustif/codex-plusplus";
 const CODEX_WINDOW_SERVICES_KEY = "__codexpp_window_services__";
 
 mkdirSync(LOG_DIR, { recursive: true });

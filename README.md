@@ -19,7 +19,7 @@ Everything beyond the one-time install patch lives **outside** the app bundle, s
 Homebrew:
 
 ```sh
-brew tap b-nnett/codex-plusplus https://github.com/b-nnett/codex-plusplus
+brew tap agustif/codex-plusplus https://github.com/agustif/codex-plusplus
 brew install codexplusplus
 codexplusplus install
 ```
@@ -27,20 +27,20 @@ codexplusplus install
 Bun:
 
 ```sh
-bun install -g github:b-nnett/codex-plusplus
+bun install -g github:agustif/codex-plusplus
 codexplusplus install
 ```
 
 Source bootstrap (macOS / Linux):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/b-nnett/codex-plusplus/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/agustif/codex-plusplus/main/install.sh | bash
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/b-nnett/codex-plusplus/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/agustif/codex-plusplus/main/install.ps1 | iex
 ```
 
 That's it. The installer:
@@ -91,8 +91,8 @@ Codex updates and restarts, the watcher re-applies Codex++ to the new app.
 
 Default tweaks currently installed on first run:
 
-- `co.bennett.custom-keyboard-shortcuts` from `b-nnett/codex-plusplus-keyboard-shortcuts`
-- `co.bennett.ui-improvements` from `b-nnett/codex-plusplus-bennett-ui`
+- `co.bennett.custom-keyboard-shortcuts` from `agustif/codex-plusplus-keyboard-shortcuts`
+- `co.bennett.ui-improvements` from `agustif/codex-plusplus-bennett-ui`
 
 ## Writing a tweak
 

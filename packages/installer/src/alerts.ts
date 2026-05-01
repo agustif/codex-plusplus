@@ -6,7 +6,7 @@ import { readPlist } from "./plist.js";
 import { CODEX_PLUSPLUS_VERSION } from "./version.js";
 
 const CODEX_BUNDLE_ID = "com.openai.codex";
-const CODEX_PLUSPLUS_REPO_URL = "https://github.com/b-nnett/codex-plusplus";
+const CODEX_PLUSPLUS_REPO_URL = "https://github.com/agustif/codex-plusplus";
 
 export function showPatchFailedAlert(errorMessage: string): void {
   const button = showAlert({

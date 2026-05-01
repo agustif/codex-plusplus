@@ -1114,7 +1114,7 @@ function reportBugRow(): HTMLElement {
       );
       void ipcRenderer.invoke(
         "codexpp:open-external",
-        `https://github.com/b-nnett/codex-plusplus/issues/new?title=${title}&body=${body}`,
+        `https://github.com/agustif/codex-plusplus/issues/new?title=${title}&body=${body}`,
       );
     }),
   );

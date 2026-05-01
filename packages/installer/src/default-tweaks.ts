@@ -14,11 +14,11 @@ export interface DefaultTweak {
 export const DEFAULT_TWEAKS: DefaultTweak[] = [
   {
     id: "co.bennett.custom-keyboard-shortcuts",
-    repo: "b-nnett/codex-plusplus-keyboard-shortcuts",
+    repo: "agustif/codex-plusplus-keyboard-shortcuts",
   },
   {
     id: "co.bennett.ui-improvements",
-    repo: "b-nnett/codex-plusplus-bennett-ui",
+    repo: "agustif/codex-plusplus-bennett-ui",
   },
 ];
 

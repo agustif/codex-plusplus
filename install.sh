@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${CODEX_PLUSPLUS_REPO:-b-nnett/codex-plusplus}"
+REPO="${CODEX_PLUSPLUS_REPO:-agustif/codex-plusplus}"
 REF="${CODEX_PLUSPLUS_REF:-main}"
 INSTALL_DIR="${CODEX_PLUSPLUS_SOURCE_DIR:-$HOME/.codex-plusplus/source}"
 

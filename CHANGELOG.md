@@ -4,6 +4,14 @@ All notable changes to codex-plusplus are documented here.
 
 This project uses semver for the installer, runtime, SDK, and published CLI package. Tweak authors should also use semver release tags so the manager can compare installed and available versions.
 
+## 0.1.4
+
+Release notes: [docs/releases/0.1.4.md](docs/releases/0.1.4.md)
+
+### Changed
+
+- Pointed the source bootstrap, self-update flow, issue links, package metadata, and default tweak download sources at the `agustif` fork family.
+
 ## 0.1.3
 
 Release notes: [docs/releases/0.1.3.md](docs/releases/0.1.3.md)

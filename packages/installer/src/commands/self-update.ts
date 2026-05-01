@@ -49,7 +49,7 @@ interface UpdateTarget {
 const here = dirname(fileURLToPath(import.meta.url));
 
 export async function selfUpdate(opts: Opts = {}): Promise<void> {
-  const repo = opts.repo ?? process.env.CODEX_PLUSPLUS_REPO ?? "b-nnett/codex-plusplus";
+  const repo = opts.repo ?? process.env.CODEX_PLUSPLUS_REPO ?? "agustif/codex-plusplus";
   const paths = ensureUserPaths();
   const sourceRoot = findSourceRoot(here);
   const parent = dirname(sourceRoot);
