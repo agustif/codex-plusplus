@@ -94,6 +94,56 @@ interface WatcherHealthCheck {
   detail: string;
 }
 
+interface PatchManagerStatus {
+  checkedAt: string;
+  currentChannel: "stable" | "beta" | "unknown";
+  currentUserRoot: string;
+  channels: PatchChannelStatus[];
+}
+
+interface PatchChannelStatus {
+  channel: "stable" | "beta";
+  label: string;
+  current: boolean;
+  userRoot: string;
+  statePath: string;
+  configPath: string;
+  appRoot: string;
+  appExists: boolean;
+  stateExists: boolean;
+  codexVersion: string | null;
+  codexPlusPlusVersion: string | null;
+  bundleId: string | null;
+  watcher: string | null;
+  watcherLabel: string;
+  watcherLoaded: boolean | null;
+  runtimePreloadPath: string;
+  runtimePreloadExists: boolean;
+  runtimePreloadBytes: number | null;
+  runtimeUpdatedAt: string | null;
+  autoUpdate: boolean;
+  cdp: PatchCdpStatus;
+  commands: PatchChannelCommands;
+}
+
+interface PatchCdpStatus {
+  enabled: boolean;
+  configuredPort: number;
+  expectedPort: number;
+  activePort: number | null;
+  active: boolean;
+  drift: boolean;
+  jsonListUrl: string | null;
+  jsonVersionUrl: string | null;
+}
+
+interface PatchChannelCommands {
+  repair: string;
+  reopenWithCdp: string;
+  status: string;
+  updateCodex: string;
+}
+
 /**
  * A tweak-registered page. We carry the owning tweak's manifest so we can
  * resolve relative iconUrls and show authorship in the page header.
@@ -113,6 +163,7 @@ interface RegisteredPage {
 /** What page is currently selected in our injected nav. */
 type ActivePage =
   | { kind: "config" }
+  | { kind: "patch-manager" }
   | { kind: "tweaks" }
   | { kind: "registered"; id: string };
 
@@ -126,7 +177,11 @@ interface InjectorState {
   nativeNavHeader: HTMLElement | null;
   /** Our "Codex++" nav group (Config/Tweaks). */
   navGroup: HTMLElement | null;
-  navButtons: { config: HTMLButtonElement; tweaks: HTMLButtonElement } | null;
+  navButtons: {
+    config: HTMLButtonElement;
+    patchManager: HTMLButtonElement;
+    tweaks: HTMLButtonElement;
+  } | null;
   /** Our "Tweaks" nav group (per-tweak pages). Created lazily. */
   pagesGroup: HTMLElement | null;
   pagesGroupKey: string | null;
@@ -359,14 +414,20 @@ function tryInject(): void {
 
   group.appendChild(sidebarGroupHeader("Codex++", "pt-3"));
 
-  // ── Two sidebar items ────────────────────────────────────────────────
+  // ── Built-in sidebar items ───────────────────────────────────────────
   const configBtn = makeSidebarItem("Config", configIconSvg());
+  const patchManagerBtn = makeSidebarItem("Patch Manager", patchManagerIconSvg());
   const tweaksBtn = makeSidebarItem("Tweaks", tweaksIconSvg());
 
   configBtn.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
     activatePage({ kind: "config" });
+  });
+  patchManagerBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    activatePage({ kind: "patch-manager" });
   });
   tweaksBtn.addEventListener("click", (e) => {
     e.preventDefault();
@@ -375,11 +436,12 @@ function tryInject(): void {
   });
 
   group.appendChild(configBtn);
+  group.appendChild(patchManagerBtn);
   group.appendChild(tweaksBtn);
   outer.appendChild(group);
 
   state.navGroup = group;
-  state.navButtons = { config: configBtn, tweaks: tweaksBtn };
+  state.navButtons = { config: configBtn, patchManager: patchManagerBtn, tweaks: tweaksBtn };
   plog("nav group injected", { outerTag: outer.tagName });
   syncPagesGroup();
 }
@@ -525,13 +587,14 @@ function makeSidebarItem(label: string, iconSvg: string): HTMLButtonElement {
 }
 
 /** Internal key for the built-in nav buttons. */
-type BuiltinPage = "config" | "tweaks";
+type BuiltinPage = "config" | "patchManager" | "tweaks";
 
 function setNavActive(active: ActivePage | null): void {
   // Built-in (Config/Tweaks) buttons.
   if (state.navButtons) {
     const builtin: BuiltinPage | null =
       active?.kind === "config" ? "config" :
+      active?.kind === "patch-manager" ? "patchManager" :
       active?.kind === "tweaks" ? "tweaks" : null;
     for (const [key, btn] of Object.entries(state.navButtons) as [BuiltinPage, HTMLButtonElement][]) {
       applyNavActive(btn, key === builtin);
@@ -709,6 +772,13 @@ function rerender(): void {
     return;
   }
 
+  if (ap.kind === "patch-manager") {
+    const root = panelShell("Patch Manager", "Checking Stable and Beta patch state.");
+    host.appendChild(root.outer);
+    renderPatchManagerPage(root.sectionsWrap, root.subtitle);
+    return;
+  }
+
   const title = ap.kind === "tweaks" ? "Tweaks" : "Config";
   const subtitle = ap.kind === "tweaks"
     ? "Manage your installed Codex++ tweaks."
@@ -772,6 +842,165 @@ function renderConfigPage(sectionsWrap: HTMLElement, subtitle?: HTMLElement): vo
   maintenanceCard.appendChild(reportBugRow());
   maintenance.appendChild(maintenanceCard);
   sectionsWrap.appendChild(maintenance);
+}
+
+function renderPatchManagerPage(sectionsWrap: HTMLElement, subtitle?: HTMLElement): void {
+  const refresh = compactButton("Refresh", () => {
+    sectionsWrap.textContent = "";
+    renderPatchManagerPage(sectionsWrap, subtitle);
+  });
+
+  const overview = document.createElement("section");
+  overview.className = "flex flex-col gap-2";
+  overview.appendChild(sectionTitle("Stable / Beta", refresh));
+  const overviewCard = roundedCard();
+  overviewCard.appendChild(rowSimple("Checking patch state", "Reading Codex++ homes and app bundles."));
+  overview.appendChild(overviewCard);
+  sectionsWrap.appendChild(overview);
+
+  const commands = document.createElement("section");
+  commands.className = "flex flex-col gap-2";
+  commands.appendChild(sectionTitle("Commands"));
+  const commandsCard = roundedCard();
+  commandsCard.appendChild(rowSimple("Loading commands", "Preparing exact repair and reopen commands."));
+  commands.appendChild(commandsCard);
+  sectionsWrap.appendChild(commands);
+
+  void ipcRenderer
+    .invoke("codexpp:get-patch-manager-status")
+    .then((status) => {
+      const patch = status as PatchManagerStatus;
+      if (subtitle) {
+        subtitle.textContent =
+          patch.currentChannel === "unknown"
+            ? `Checked ${new Date(patch.checkedAt).toLocaleString()}.`
+            : `Running from ${channelLabel(patch.currentChannel)}. Checked ${new Date(patch.checkedAt).toLocaleString()}.`;
+      }
+      overviewCard.textContent = "";
+      commandsCard.textContent = "";
+      for (const channel of patch.channels) {
+        overviewCard.appendChild(patchChannelRow(channel));
+        commandsCard.appendChild(patchCommandRow(channel));
+      }
+    })
+    .catch((e) => {
+      if (subtitle) subtitle.textContent = "Could not read patch state.";
+      overviewCard.textContent = "";
+      commandsCard.textContent = "";
+      overviewCard.appendChild(rowSimple("Patch state unavailable", String(e)));
+      commandsCard.appendChild(rowSimple("Commands unavailable", "Patch status failed before commands were built."));
+    });
+}
+
+function patchChannelRow(channel: PatchChannelStatus): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "flex items-center justify-between gap-4 p-3";
+
+  const left = document.createElement("div");
+  left.className = "flex min-w-0 items-start gap-3";
+  left.appendChild(statusBadge(patchChannelTone(channel), channel.current ? `${channel.label} current` : channel.label));
+
+  const stack = document.createElement("div");
+  stack.className = "flex min-w-0 flex-col gap-1";
+  const title = document.createElement("div");
+  title.className = "min-w-0 text-sm text-token-text-primary";
+  title.textContent = patchChannelTitle(channel);
+  const desc = document.createElement("div");
+  desc.className = "text-token-text-secondary min-w-0 text-sm";
+  desc.textContent = patchChannelSummary(channel);
+  const meta = document.createElement("div");
+  meta.className = "text-token-text-secondary min-w-0 truncate text-xs";
+  meta.textContent = channel.appRoot;
+  stack.append(title, desc, meta);
+  left.appendChild(stack);
+  row.appendChild(left);
+
+  const actions = document.createElement("div");
+  actions.className = "flex shrink-0 items-center gap-2";
+  actions.appendChild(
+    compactButton("Reveal", () => {
+      void ipcRenderer.invoke("codexpp:reveal", channel.userRoot);
+    }),
+  );
+  if (channel.cdp.jsonListUrl) {
+    actions.appendChild(
+      compactButton("Targets", () => {
+        void ipcRenderer.invoke("codexpp:open-cdp-url", channel.cdp.jsonListUrl);
+      }),
+    );
+  }
+  row.appendChild(actions);
+  return row;
+}
+
+function patchCommandRow(channel: PatchChannelStatus): HTMLElement {
+  const row = actionRow(
+    `${channel.label} repair`,
+    `${commandSummary(channel)} Saved CDP ${channel.cdp.configuredPort}; default ${channel.cdp.expectedPort}.`,
+  );
+  const action = row.querySelector<HTMLElement>("[data-codexpp-row-actions]");
+  action?.appendChild(copyCommandButton("Repair", channel.commands.repair));
+  action?.appendChild(copyCommandButton("Reopen", channel.commands.reopenWithCdp));
+  action?.appendChild(copyCommandButton("Status", channel.commands.status));
+  action?.appendChild(copyCommandButton("Update", channel.commands.updateCodex));
+  return row;
+}
+
+function copyCommandButton(label: string, command: string): HTMLButtonElement {
+  return compactButton(label, () => {
+    void ipcRenderer.invoke("codexpp:copy-text", command);
+  });
+}
+
+function patchChannelTitle(channel: PatchChannelStatus): string {
+  if (!channel.stateExists) return `${channel.label} is not installed through Codex++`;
+  const codex = channel.codexVersion ? `Codex ${channel.codexVersion}` : "Codex version unknown";
+  const codexpp = channel.codexPlusPlusVersion ? `Codex++ ${channel.codexPlusPlusVersion}` : "Codex++ version unknown";
+  return `${codex} · ${codexpp}`;
+}
+
+function patchChannelSummary(channel: PatchChannelStatus): string {
+  const runtime = channel.runtimePreloadExists
+    ? `runtime ${formatBytes(channel.runtimePreloadBytes)}`
+    : "runtime missing";
+  const watcher = channel.watcherLoaded === null
+    ? "watcher unknown"
+    : channel.watcherLoaded
+      ? "watcher loaded"
+      : "watcher not loaded";
+  const cdp = channel.cdp.active
+    ? `CDP active on ${channel.cdp.activePort}`
+    : channel.cdp.enabled
+      ? `CDP saved on ${channel.cdp.configuredPort}`
+      : "CDP off";
+  const drift = channel.cdp.drift ? `; expected ${channel.cdp.expectedPort}` : "";
+  return `${runtime}; ${watcher}; ${cdp}${drift}.`;
+}
+
+function commandSummary(channel: PatchChannelStatus): string {
+  if (!channel.appExists) return "App bundle is missing at the recorded path.";
+  if (!channel.runtimePreloadExists) return "Runtime preload is missing; repair should refresh it.";
+  if (!channel.autoUpdate) return "Automatic repair is disabled.";
+  return "Patch files are present.";
+}
+
+function patchChannelTone(channel: PatchChannelStatus): "ok" | "warn" | "error" {
+  if (!channel.stateExists || !channel.appExists || !channel.runtimePreloadExists) return "error";
+  if (channel.watcherLoaded === false || channel.cdp.drift || !channel.autoUpdate) return "warn";
+  return "ok";
+}
+
+function channelLabel(channel: PatchManagerStatus["currentChannel"]): string {
+  if (channel === "stable") return "Stable";
+  if (channel === "beta") return "Beta";
+  return "Unknown";
+}
+
+function formatBytes(bytes: number | null): string {
+  if (bytes === null) return "missing";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function renderCodexPlusPlusConfig(card: HTMLElement, config: CodexPlusPlusConfig): void {
@@ -1799,6 +2028,17 @@ function configIconSvg(): string {
     `<circle cx="13" cy="5" r="1.6" fill="currentColor"/>` +
     `<circle cx="6" cy="10" r="1.6" fill="currentColor"/>` +
     `<circle cx="15" cy="15" r="1.6" fill="currentColor"/>` +
+    `</svg>`
+  );
+}
+
+function patchManagerIconSvg(): string {
+  // App bundle + repair/check glyph.
+  return (
+    `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" class="icon-sm inline-block align-middle" aria-hidden="true">` +
+    `<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h7A2.5 2.5 0 0 1 16 5.5v9A2.5 2.5 0 0 1 13.5 17h-7A2.5 2.5 0 0 1 4 14.5v-9Z" stroke="currentColor" stroke-width="1.5"/>` +
+    `<path d="M7 7h6M7 10h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>` +
+    `<path d="M8.25 13.25 9.6 14.6l2.9-3.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>` +
     `</svg>`
   );
 }

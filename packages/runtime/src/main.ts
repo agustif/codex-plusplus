@@ -18,6 +18,7 @@ import { createDiskStorage, type DiskStorage } from "./storage";
 import { syncManagedMcpServers } from "./mcp-sync";
 import { getWatcherHealth } from "./watcher-health";
 import { createGitMetadataProvider } from "./git-metadata";
+import { getPatchManagerStatus } from "./patch-manager";
 import {
   isMainProcessTweakScope,
   reloadTweaks,
@@ -637,6 +638,14 @@ ipcMain.handle("codexpp:check-codexpp-update", async (_e, force?: boolean) => {
 });
 
 ipcMain.handle("codexpp:get-watcher-health", () => getWatcherHealth(userRoot!));
+ipcMain.handle("codexpp:get-patch-manager-status", () =>
+  getPatchManagerStatus({
+    userRoot: userRoot!,
+    runtimeDir: runtimeDir!,
+    activeCdpPort: getActiveRemoteDebuggingPort(),
+    appName: app.getName(),
+  }),
+);
 
 // Sandboxed renderer preload can't use Node fs to read tweak source. Main
 // reads it on the renderer's behalf. Path must live under tweaksDir for
