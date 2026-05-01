@@ -79,6 +79,21 @@ interface CodexCdpStatus {
   appRoot: string | null;
 }
 
+interface AppServerFlowTapStatus {
+  installed: boolean;
+  enabled: boolean;
+  active: boolean;
+  source: "env" | "config" | "off";
+  logPath: string;
+  activePids: number[];
+  childCount: number;
+  capturedMessages: number;
+  lastEventAt: string | null;
+  rawPayloads: boolean;
+  droppedLogLines: number;
+  logSizeBytes: number | null;
+}
+
 interface WatcherHealth {
   checkedAt: string;
   status: "ok" | "warn" | "error";
@@ -834,6 +849,15 @@ function renderConfigPage(sectionsWrap: HTMLElement, subtitle?: HTMLElement): vo
   sectionsWrap.appendChild(cdp);
   renderCdpCard(cdpCard);
 
+  const flowTap = document.createElement("section");
+  flowTap.className = "flex flex-col gap-2";
+  flowTap.appendChild(sectionTitle("App Server Flow Tap"));
+  const flowTapCard = roundedCard();
+  flowTapCard.appendChild(rowSimple("Checking flow tap", "Reading app-server instrumentation status."));
+  flowTap.appendChild(flowTapCard);
+  sectionsWrap.appendChild(flowTap);
+  renderAppServerFlowTapCard(flowTapCard);
+
   const maintenance = document.createElement("section");
   maintenance.className = "flex flex-col gap-2";
   maintenance.appendChild(sectionTitle("Maintenance"));
@@ -1255,6 +1279,207 @@ function cdpStatusSummary(status: CodexCdpStatus): string {
   return "Disabled for Codex launches managed by Codex++.";
 }
 
+function renderAppServerFlowTapCard(card: HTMLElement): void {
+  void ipcRenderer
+    .invoke("codexpp:get-app-server-flow-tap-status")
+    .then((status) => {
+      card.textContent = "";
+      renderAppServerFlowTapStatus(card, status as AppServerFlowTapStatus);
+    })
+    .catch((e) => {
+      card.textContent = "";
+      card.appendChild(rowSimple("Could not read flow tap status", String(e)));
+    });
+}
+
+function renderAppServerFlowTapStatus(card: HTMLElement, status: AppServerFlowTapStatus): void {
+  card.appendChild(appServerFlowTapToggleRow(card, status));
+  card.appendChild(appServerFlowTapSummaryRow(status));
+  card.appendChild(appServerFlowTapLogActionsRow(card, status));
+  const logRow = document.createElement("div");
+  logRow.className = "flex flex-col gap-2 p-3";
+  logRow.appendChild(rowInlineTitle("Recent protocol flow"));
+  const body = document.createElement("pre");
+  body.className =
+    "max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-token-border bg-token-foreground/5 p-3 text-xs text-token-text-secondary";
+  body.textContent = "Reading app-server flow log.";
+  logRow.appendChild(body);
+  card.appendChild(logRow);
+  refreshAppServerFlowTapTail(body);
+}
+
+function appServerFlowTapToggleRow(card: HTMLElement, status: AppServerFlowTapStatus): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "flex items-center justify-between gap-4 p-3";
+
+  const left = document.createElement("div");
+  left.className = "flex min-w-0 items-start gap-3";
+  left.appendChild(appServerFlowTapStatusBadge(status));
+
+  const stack = document.createElement("div");
+  stack.className = "flex min-w-0 flex-col gap-1";
+  const title = document.createElement("div");
+  title.className = "min-w-0 text-sm text-token-text-primary";
+  title.textContent = "App-server stdio flow";
+  const desc = document.createElement("div");
+  desc.className = "text-token-text-secondary min-w-0 text-sm";
+  desc.textContent = appServerFlowTapSummary(status);
+  stack.append(title, desc);
+  left.appendChild(stack);
+  row.appendChild(left);
+
+  row.appendChild(
+    switchControl(status.enabled, async (enabled) => {
+      await ipcRenderer.invoke("codexpp:set-app-server-flow-tap-config", { enabled });
+      refreshAppServerFlowTapCard(card);
+    }),
+  );
+
+  return row;
+}
+
+function appServerFlowTapSummaryRow(status: AppServerFlowTapStatus): HTMLElement {
+  const active = status.activePids.length > 0
+    ? `capturing PID ${status.activePids.join(", ")}`
+    : "waiting for the next app-server child";
+  return rowSimple(
+    "Capture state",
+    `${active}; ${status.capturedMessages} line(s) captured; ${status.rawPayloads ? "raw payloads on" : "summary-only"}; ${status.droppedLogLines} dropped; log ${bytesLabel(status.logSizeBytes)}.`,
+  );
+}
+
+function appServerFlowTapLogActionsRow(card: HTMLElement, status: AppServerFlowTapStatus): HTMLElement {
+  const row = actionRow("Flow log", status.logPath);
+  const action = row.querySelector<HTMLElement>("[data-codexpp-row-actions]");
+  action?.appendChild(
+    compactButton("Refresh", () => refreshAppServerFlowTapCard(card)),
+  );
+  action?.appendChild(
+    compactButton("Copy Tail", () => {
+      void ipcRenderer
+        .invoke("codexpp:read-app-server-flow-tap-log", 256 * 1024)
+        .then((text) => ipcRenderer.invoke("codexpp:copy-text", String(text)))
+        .catch((e) => plog("flow tap copy failed", String(e)));
+    }),
+  );
+  action?.appendChild(
+    compactButton("Open Log", () => {
+      void ipcRenderer.invoke("codexpp:open-app-server-flow-tap-log");
+    }),
+  );
+  action?.appendChild(
+    compactButton("Reveal", () => {
+      void ipcRenderer.invoke("codexpp:reveal-app-server-flow-tap-log");
+    }),
+  );
+  return row;
+}
+
+function refreshAppServerFlowTapCard(card: HTMLElement): void {
+  card.textContent = "";
+  card.appendChild(rowSimple("Checking flow tap", "Reading app-server instrumentation status."));
+  renderAppServerFlowTapCard(card);
+}
+
+function refreshAppServerFlowTapTail(target: HTMLElement): void {
+  void ipcRenderer
+    .invoke("codexpp:read-app-server-flow-tap-log", 256 * 1024)
+    .then((text) => {
+      const formatted = formatAppServerFlowTail(String(text));
+      target.textContent = formatted || "No app-server flow has been captured yet.";
+    })
+    .catch((e) => {
+      target.textContent = `Could not read flow log: ${String(e)}`;
+    });
+}
+
+function formatAppServerFlowTail(text: string): string {
+  const lines = text.trim().split("\n").filter(Boolean).slice(-80);
+  return lines.map(formatAppServerFlowLine).join("\n");
+}
+
+function formatAppServerFlowLine(line: string): string {
+  try {
+    const record = JSON.parse(line) as {
+      ts?: string;
+      event?: string;
+      stream?: string;
+      direction?: string;
+      jsonrpc?: {
+        kind?: string;
+        id?: string | number | null;
+        method?: string;
+        threadId?: string;
+        turnId?: string;
+        status?: string;
+        errorMessage?: string;
+        resultDataCount?: number;
+        hasNextCursor?: boolean;
+      };
+      text?: string;
+      pid?: number | null;
+    };
+    const ts = record.ts ? record.ts.slice(11, 23) : "--:--:--.---";
+    if (record.event !== "line") {
+      return `${ts} ${record.event ?? "event"} pid=${record.pid ?? "-"}`;
+    }
+    const rpc = record.jsonrpc;
+    if (rpc) {
+      const parts = [
+        ts,
+        record.stream ?? "?",
+        rpc.kind ?? "json",
+        rpc.method ?? `id=${rpc.id ?? "-"}`,
+        rpc.status ? `status=${rpc.status}` : "",
+        rpc.threadId ? `thread=${shortId(rpc.threadId)}` : "",
+        rpc.turnId ? `turn=${shortId(rpc.turnId)}` : "",
+        typeof rpc.resultDataCount === "number" ? `items=${rpc.resultDataCount}` : "",
+        typeof rpc.hasNextCursor === "boolean" ? `next=${rpc.hasNextCursor ? "yes" : "no"}` : "",
+        rpc.errorMessage ? `error=${rpc.errorMessage}` : "",
+      ].filter(Boolean);
+      return parts.join(" ");
+    }
+    const payload = record.text ? String(record.text).slice(0, 500) : "(payload omitted)";
+    return `${ts} ${record.stream ?? "?"} ${payload}`;
+  } catch {
+    return line;
+  }
+}
+
+function appServerFlowTapStatusBadge(status: AppServerFlowTapStatus): HTMLElement {
+  if (status.active) return statusBadge("ok", "Flowing");
+  if (status.enabled) return statusBadge("warn", "Armed");
+  return statusBadge("warn", "Off");
+}
+
+function appServerFlowTapSummary(status: AppServerFlowTapStatus): string {
+  if (status.activePids.length > 0) {
+    return `Capturing stdio for app-server PID ${status.activePids.join(", ")}.`;
+  }
+  if (status.enabled) {
+    return "Enabled; restart Codex if the current app-server was spawned before the tap was armed.";
+  }
+  return "Disabled. Enable it to tee app-server stdin/stdout/stderr summaries into a capped JSONL log.";
+}
+
+function rowInlineTitle(text: string): HTMLElement {
+  const title = document.createElement("div");
+  title.className = "text-sm text-token-text-primary";
+  title.textContent = text;
+  return title;
+}
+
+function bytesLabel(bytes: number | null): string {
+  if (bytes === null) return "missing";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function shortId(value: string): string {
+  return value.length <= 12 ? value : `${value.slice(0, 6)}…${value.slice(-4)}`;
+}
+
 function renderReleaseNotesMarkdown(markdown: string): HTMLElement {
   const root = document.createElement("div");
   root.className = "flex flex-col gap-2";
@@ -1534,13 +1759,16 @@ function reportBugRow(): HTMLElement {
 function actionRow(titleText: string, description: string): HTMLElement {
   const row = document.createElement("div");
   row.className = "flex items-center justify-between gap-4 p-3";
+  row.style.flexWrap = "wrap";
   const left = document.createElement("div");
   left.className = "flex min-w-0 flex-col gap-1";
+  left.style.flex = "1 1 18rem";
   const title = document.createElement("div");
   title.className = "min-w-0 text-sm text-token-text-primary";
   title.textContent = titleText;
   const desc = document.createElement("div");
   desc.className = "text-token-text-secondary min-w-0 text-sm";
+  desc.style.overflowWrap = "anywhere";
   desc.textContent = description;
   left.appendChild(title);
   left.appendChild(desc);
@@ -1548,6 +1776,9 @@ function actionRow(titleText: string, description: string): HTMLElement {
   const actions = document.createElement("div");
   actions.dataset.codexppRowActions = "true";
   actions.className = "flex shrink-0 items-center gap-2";
+  actions.style.flexWrap = "wrap";
+  actions.style.justifyContent = "flex-end";
+  actions.style.maxWidth = "100%";
   row.appendChild(actions);
   return row;
 }

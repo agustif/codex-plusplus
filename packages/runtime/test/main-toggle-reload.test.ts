@@ -73,6 +73,26 @@ test("bundled manual force reload delegates to lifecycle helper", () => {
   assertCallOrder(body, ["reloadTweaks", "return "]);
 });
 
+test("source exposes app-server flow tap IPC", () => {
+  assertIncludesAll(runtimeSource, [
+    "codexpp:get-app-server-flow-tap-status",
+    "codexpp:set-app-server-flow-tap-config",
+    "codexpp:read-app-server-flow-tap-log",
+    "codexpp:open-app-server-flow-tap-log",
+    "codexpp:reveal-app-server-flow-tap-log",
+  ]);
+});
+
+test("bundled runtime exposes app-server flow tap IPC", () => {
+  assertIncludesAll(bundledRuntime, [
+    "codexpp:get-app-server-flow-tap-status",
+    "codexpp:set-app-server-flow-tap-config",
+    "codexpp:read-app-server-flow-tap-log",
+    "codexpp:open-app-server-flow-tap-log",
+    "codexpp:reveal-app-server-flow-tap-log",
+  ]);
+});
+
 test("source lifecycle reload helper uses the full main reload sequence", () => {
   const body = extractFunctionBody(lifecycleSource, "reloadTweaks");
 
@@ -156,5 +176,11 @@ function assertCallOrder(body: string, calls: string[]): void {
     assert.notEqual(current, -1, `missing ${call}`);
     assert.ok(current > previous, `${call} is out of order`);
     previous = current;
+  }
+}
+
+function assertIncludesAll(source: string, needles: string[]): void {
+  for (const needle of needles) {
+    assert.ok(source.includes(needle), `missing ${needle}`);
   }
 }

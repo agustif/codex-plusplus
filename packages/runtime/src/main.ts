@@ -8,7 +8,7 @@
  * code). The renderer-side runtime is bundled separately into preload.js.
  */
 import { app, BrowserView, BrowserWindow, clipboard, ipcMain, session, shell, webContents } from "electron";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -25,6 +25,12 @@ import {
   setTweakEnabledAndReload,
 } from "./tweak-lifecycle";
 import { appendCappedLog } from "./logging";
+import {
+  configureAppServerFlowTap,
+  getAppServerFlowTapRuntimeStatus,
+  installAppServerFlowTap,
+  type AppServerFlowTapRuntimeStatus,
+} from "./app-server-flow-tap";
 
 const userRoot = process.env.CODEX_PLUSPLUS_USER_ROOT;
 const runtimeDir = process.env.CODEX_PLUSPLUS_RUNTIME;
@@ -39,6 +45,7 @@ const PRELOAD_PATH = resolve(runtimeDir, "preload.js");
 const TWEAKS_DIR = join(userRoot, "tweaks");
 const LOG_DIR = join(userRoot, "log");
 const LOG_FILE = join(LOG_DIR, "main.log");
+const APP_SERVER_FLOW_TAP_LOG_FILE = join(LOG_DIR, "app-server-flow.jsonl");
 const CONFIG_FILE = join(userRoot, "config.json");
 const CODEX_CONFIG_FILE = join(homedir(), ".codex", "config.toml");
 const INSTALLER_STATE_FILE = join(userRoot, "state.json");
@@ -72,12 +79,25 @@ if (startupCdp.enabled && !hasRemoteDebuggingSwitch()) {
   log("info", `remote debugging enabled on port ${startupCdp.port} via ${startupCdp.source}`);
 }
 
+const startupFlowTap = resolveStartupAppServerFlowTapConfig();
+installAppServerFlowTap({
+  enabled: startupFlowTap.enabled,
+  source: startupFlowTap.source,
+  logPath: APP_SERVER_FLOW_TAP_LOG_FILE,
+  rawPayloads: startupFlowTap.rawPayloads,
+});
+log(
+  "info",
+  `app-server flow tap ${startupFlowTap.enabled ? "enabled" : "installed disabled"} via ${startupFlowTap.source}`,
+);
+
 interface PersistedState {
   codexPlusPlus?: {
     autoUpdate?: boolean;
     safeMode?: boolean;
     updateCheck?: CodexPlusPlusUpdateCheck;
     cdp?: CodexCdpConfig;
+    appServerFlowTap?: AppServerFlowTapConfig;
   };
   /** Per-tweak enable flags. Missing entries default to enabled. */
   tweaks?: Record<string, { enabled?: boolean }>;
@@ -88,6 +108,15 @@ interface PersistedState {
 interface CodexCdpConfig {
   enabled?: boolean;
   port?: number;
+}
+
+interface AppServerFlowTapConfig {
+  enabled?: boolean;
+  rawPayloads?: boolean;
+}
+
+interface AppServerFlowTapStatus extends AppServerFlowTapRuntimeStatus {
+  logSizeBytes: number | null;
 }
 
 interface CodexCdpStatus {
@@ -156,6 +185,22 @@ function setCodexCdpConfig(config: CodexCdpConfig): void {
   };
   writeState(s);
 }
+function setAppServerFlowTapConfig(config: AppServerFlowTapConfig): void {
+  const s = readState();
+  const previous = s.codexPlusPlus?.appServerFlowTap ?? {};
+  s.codexPlusPlus ??= {};
+  s.codexPlusPlus.appServerFlowTap = {
+    enabled: config.enabled === true,
+    rawPayloads: config.rawPayloads === true || previous.rawPayloads === true,
+  };
+  writeState(s);
+  configureAppServerFlowTap({
+    enabled: config.enabled === true,
+    source: config.enabled === true ? "config" : "off",
+    logPath: APP_SERVER_FLOW_TAP_LOG_FILE,
+    rawPayloads: config.rawPayloads === true || previous.rawPayloads === true,
+  });
+}
 function isCodexPlusPlusSafeModeEnabled(): boolean {
   return readState().codexPlusPlus?.safeMode === true;
 }
@@ -193,6 +238,15 @@ function readEarlyCdpConfig(): CodexCdpConfig {
   }
 }
 
+function readEarlyAppServerFlowTapConfig(): AppServerFlowTapConfig {
+  try {
+    const parsed = JSON.parse(readFileSync(CONFIG_FILE, "utf8")) as PersistedState;
+    return parsed.codexPlusPlus?.appServerFlowTap ?? {};
+  } catch {
+    return {};
+  }
+}
+
 function resolveStartupCdpConfig(): { enabled: boolean; port: number; source: CodexCdpStatus["source"] } {
   const argvPort = getActiveRemoteDebuggingPort();
   if (argvPort !== null) {
@@ -217,6 +271,23 @@ function resolveStartupCdpConfig(): { enabled: boolean; port: number; source: Co
   }
 
   return { enabled: false, port: normalizeCdpPort(cdp.port), source: "off" };
+}
+
+function resolveStartupAppServerFlowTapConfig(): { enabled: boolean; source: "env" | "config" | "off"; rawPayloads: boolean } {
+  if (process.env.CODEXPP_APP_SERVER_FLOW_TAP === "1" || process.env.CODEXPP_FLOW_TAP === "1") {
+    return {
+      enabled: true,
+      source: "env",
+      rawPayloads: process.env.CODEXPP_APP_SERVER_FLOW_TAP_RAW === "1" || process.env.CODEXPP_FLOW_TAP_RAW === "1",
+    };
+  }
+
+  const config = readEarlyAppServerFlowTapConfig();
+  if (config.enabled === true) {
+    return { enabled: true, source: "config", rawPayloads: config.rawPayloads === true };
+  }
+
+  return { enabled: false, source: "off", rawPayloads: false };
 }
 
 function hasRemoteDebuggingSwitch(): boolean {
@@ -271,6 +342,31 @@ function getCodexCdpStatus(): CodexCdpStatus {
     launchCommand: buildCdpLaunchCommand(appRoot, configuredPort),
     appRoot,
   };
+}
+
+function getAppServerFlowTapStatus(): AppServerFlowTapStatus {
+  return {
+    ...getAppServerFlowTapRuntimeStatus(),
+    logSizeBytes: readFileSize(APP_SERVER_FLOW_TAP_LOG_FILE),
+  };
+}
+
+function readFileSize(path: string): number | null {
+  try {
+    return statSync(path).size;
+  } catch {
+    return null;
+  }
+}
+
+function readFileTail(path: string, maxBytes: number): string {
+  try {
+    if (!existsSync(path)) return "";
+    const data = readFileSync(path);
+    return data.subarray(Math.max(0, data.byteLength - maxBytes)).toString("utf8");
+  } catch (e) {
+    return `Could not read ${path}: ${(e as Error).message}`;
+  }
 }
 
 function cdpUrl(port: number, path: string): string {
@@ -633,6 +729,13 @@ ipcMain.handle("codexpp:set-cdp-config", (_e, config: CodexCdpConfig) => {
   return getCodexCdpStatus();
 });
 
+ipcMain.handle("codexpp:get-app-server-flow-tap-status", () => getAppServerFlowTapStatus());
+
+ipcMain.handle("codexpp:set-app-server-flow-tap-config", (_e, config: AppServerFlowTapConfig) => {
+  setAppServerFlowTapConfig(config);
+  return getAppServerFlowTapStatus();
+});
+
 ipcMain.handle("codexpp:check-codexpp-update", async (_e, force?: boolean) => {
   return ensureCodexPlusPlusUpdateCheck(force === true);
 });
@@ -769,6 +872,22 @@ ipcMain.handle("codexpp:open-cdp-url", (_e, url: string) => {
     throw new Error("only local CDP /json/list and /json/version URLs can be opened");
   }
   shell.openExternal(parsed.toString()).catch(() => {});
+});
+
+ipcMain.handle("codexpp:read-app-server-flow-tap-log", (_e, maxBytes?: number) => {
+  const normalizedMaxBytes =
+    typeof maxBytes === "number" && Number.isFinite(maxBytes)
+      ? Math.max(1, Math.min(Math.floor(maxBytes), 1024 * 1024))
+      : 192 * 1024;
+  return readFileTail(APP_SERVER_FLOW_TAP_LOG_FILE, normalizedMaxBytes);
+});
+
+ipcMain.handle("codexpp:open-app-server-flow-tap-log", () => {
+  shell.openPath(APP_SERVER_FLOW_TAP_LOG_FILE).catch(() => {});
+});
+
+ipcMain.handle("codexpp:reveal-app-server-flow-tap-log", () => {
+  shell.openPath(LOG_DIR).catch(() => {});
 });
 
 ipcMain.handle("codexpp:copy-text", (_e, text: string) => {
