@@ -14,6 +14,7 @@ import { installReactHook } from "./react-hook";
 import { startSettingsInjector } from "./settings-injector";
 import { startTweakHost, teardownTweakHost } from "./tweak-host";
 import { mountManager } from "./manager";
+import { startGitSidebar } from "./git-sidebar";
 
 // File-log preload progress so we can diagnose without DevTools. Best-effort:
 // failures here must never throw because we'd take the page down with us.
@@ -62,6 +63,8 @@ async function boot() {
   try {
     startSettingsInjector();
     fileLog("settings injector started");
+    startGitSidebar();
+    fileLog("git sidebar started");
     await startTweakHost();
     fileLog("tweak host started");
     await mountManager();

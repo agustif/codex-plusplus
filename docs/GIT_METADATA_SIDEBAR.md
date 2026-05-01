@@ -1,9 +1,9 @@
-# Git Metadata Sidebar Plan
+# Git Metadata Sidebar
 
-Codex++ now has a main-process git metadata provider that tweak/UI code can call
-without shelling out from the renderer. This document captures the sidebar plan
-so the next UI slice can use the same contract instead of re-researching native
-Desktop internals.
+Codex++ now has a main-process git metadata provider and a built-in renderer
+sidebar layer for Codex Desktop project rows. The renderer never shells out; it
+uses the existing IPC-backed provider and renders metadata-only state in the
+Projects sidebar.
 
 ## Current Upstream Shape
 
@@ -49,7 +49,31 @@ Available data:
 
 ## Sidebar UI Model
 
-The first useful sidebar should stay compact and high-signal:
+The first visible implementation lives in
+`packages/runtime/src/preload/git-sidebar.ts`.
+
+It uses Codex Desktop's project-row attributes instead of guessing paths:
+
+- `data-app-action-sidebar-project-id` provides the absolute project cwd.
+- `data-app-action-sidebar-project-label` provides the visible project label.
+- The active thread, when present, sits under
+  `data-app-action-sidebar-project-list-id`, which identifies the active cwd.
+
+Rendered surfaces:
+
+- Project-row badges for visible repos:
+  - branch name or detached short SHA
+  - dirty entry count
+  - ahead/behind short markers when available
+  - conflict styling when porcelain reports unmerged entries
+- Active repo panel under the active or first usable project:
+  - branch/upstream state
+  - staged, unstaged, untracked, and conflict counts
+  - diff file count plus insertion/deletion totals
+  - first changed paths with porcelain labels
+  - linked worktree count and a compact worktree list when more than one exists
+
+The target shape remains compact and high-signal:
 
 - Repository header:
   - branch name or detached short SHA
@@ -75,15 +99,13 @@ The first useful sidebar should stay compact and high-signal:
 
 ## Refresh Strategy
 
-Use an event-first, poll-backed model:
+The implemented sidebar uses an event-first, poll-backed model:
 
-- Refresh status on sidebar open, focus regain, route/thread change, and after
-  Codex tool calls that write files.
-- Poll visible repos slowly, for example every 5 to 10 seconds while the sidebar
-  is visible and the app is focused.
-- Debounce refreshes per repo root.
-- Cache the last successful status by root so the sidebar can render instantly
-  and then reconcile.
+- Refresh status on boot, focus regain, and project/sidebar DOM mutations.
+- Poll visible repos slowly while the app is open.
+- Debounce refreshes to avoid observer loops.
+- Cache status/details per repo root so repeated sidebar changes do not rerun
+  `git` immediately.
 - Treat `truncated: true` as a UI state, not a hard error.
 
 ## Edge Cases To Handle
@@ -101,12 +123,13 @@ Use an event-first, poll-backed model:
 
 ## Next Implementation Slice
 
-1. Identify the existing file-list/sidebar React surface and its route/project
-   path source.
-2. Add a small `useGitMetadata(rootPath)` hook that calls `api.git.getStatus`
-   and `api.git.getDiffSummary`.
-3. Render the repository header and simple badges first.
-4. Add worktree switcher and richer diff footer after the basic path-status
-   mapping is proven in screenshots.
+1. Add direct file-list badges if Codex exposes a stable file/path list surface
+   beyond the Projects sidebar.
+2. Add a worktree switcher action once there is a Codex-native way to open a
+   project/worktree from renderer UI.
+3. Add richer per-file diff previews behind explicit expansion; keep the default
+   sidebar compact.
+4. Refresh after confirmed Codex tool calls that write files, if the app-server
+   exposes a stable event for that.
 5. Keep all mutating git operations out of scope for this contract. This API is
    read-only by design.
