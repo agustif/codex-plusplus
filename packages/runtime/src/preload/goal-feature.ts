@@ -32,12 +32,22 @@ interface GoalPanelState {
   collapsed: boolean;
   x: number | null;
   y: number | null;
+  width: number | null;
+  height: number | null;
 }
 
 interface GoalPanelDrag {
   pointerId: number;
   offsetX: number;
   offsetY: number;
+  width: number;
+  height: number;
+}
+
+interface GoalPanelResize {
+  pointerId: number;
+  startX: number;
+  startY: number;
   width: number;
   height: number;
 }
@@ -57,8 +67,12 @@ let hideTimer: ReturnType<typeof setTimeout> | null = null;
 let lastThreadId: string | null = null;
 let lastPanelOptions: GoalPanelOptions | null = null;
 let panelDrag: GoalPanelDrag | null = null;
+let panelResize: GoalPanelResize | null = null;
 
 const GOAL_PANEL_STATE_KEY = "codexpp:goal-panel-state";
+const GOAL_PANEL_MIN_WIDTH = 280;
+const GOAL_PANEL_MIN_HEIGHT = 160;
+const GOAL_PANEL_VIEWPORT_MARGIN = 8;
 let panelState: GoalPanelState = readGoalPanelState();
 
 export function startGoalFeature(log: (stage: string, extra?: unknown) => void = () => {}): void {
@@ -80,6 +94,7 @@ export function startGoalFeature(log: (stage: string, extra?: unknown) => void =
   }, true);
   window.addEventListener("resize", () => {
     if (!root?.isConnected) return;
+    applyGoalPanelSize(root);
     clampGoalPanelToViewport(root);
     applyGoalPanelPosition(root);
   });
@@ -319,6 +334,7 @@ function renderPanel(options: GoalPanelOptions): void {
   if (hideTimer) clearTimeout(hideTimer);
   el.innerHTML = "";
   el.className = `codexpp-goal-panel${options.error ? " is-error" : ""}${panelState.collapsed ? " is-collapsed" : ""}`;
+  applyGoalPanelSize(el);
   applyGoalPanelPosition(el);
 
   const header = document.createElement("div");
@@ -392,6 +408,15 @@ function renderPanel(options: GoalPanelOptions): void {
     }
     el.appendChild(actions);
   }
+
+  const resize = document.createElement("button");
+  resize.className = "codexpp-goal-resize";
+  resize.type = "button";
+  resize.setAttribute("aria-label", "Resize goal panel");
+  resize.addEventListener("pointerdown", startGoalPanelResize);
+  resize.addEventListener("keydown", handleGoalPanelResizeKeydown);
+  resize.addEventListener("dblclick", resetGoalPanelSize);
+  el.appendChild(resize);
 
   el.style.display = "block";
   if (!options.persistent) {
@@ -479,11 +504,123 @@ function stopGoalPanelDrag(event: PointerEvent): void {
   saveGoalPanelState();
 }
 
+function startGoalPanelResize(event: PointerEvent): void {
+  if (event.button !== 0 || panelState.collapsed) return;
+  if (!root) return;
+  const rect = root.getBoundingClientRect();
+  ensureExplicitGoalPanelFrame(rect);
+  panelResize = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    width: rect.width,
+    height: rect.height,
+  };
+  root.classList.add("is-resizing");
+  event.preventDefault();
+  event.stopPropagation();
+  window.addEventListener("pointermove", resizeGoalPanel);
+  window.addEventListener("pointerup", stopGoalPanelResize);
+}
+
+function resizeGoalPanel(event: PointerEvent): void {
+  if (!panelResize || event.pointerId !== panelResize.pointerId || !root) return;
+  const maxWidth = goalPanelMaxWidth();
+  const maxHeight = goalPanelMaxHeight();
+  panelState = {
+    ...panelState,
+    width: clamp(panelResize.width + event.clientX - panelResize.startX, GOAL_PANEL_MIN_WIDTH, maxWidth),
+    height: clamp(panelResize.height + event.clientY - panelResize.startY, GOAL_PANEL_MIN_HEIGHT, maxHeight),
+  };
+  applyGoalPanelSize(root);
+  clampGoalPanelToViewport(root);
+  applyGoalPanelPosition(root);
+}
+
+function stopGoalPanelResize(event: PointerEvent): void {
+  if (panelResize && event.pointerId !== panelResize.pointerId) return;
+  window.removeEventListener("pointermove", resizeGoalPanel);
+  window.removeEventListener("pointerup", stopGoalPanelResize);
+  if (root) root.classList.remove("is-resizing");
+  panelResize = null;
+  saveGoalPanelState();
+}
+
+function handleGoalPanelResizeKeydown(event: KeyboardEvent): void {
+  if (panelState.collapsed || !root) return;
+  const delta = event.shiftKey ? 32 : 12;
+  let widthDelta = 0;
+  let heightDelta = 0;
+  if (event.key === "ArrowLeft") widthDelta = -delta;
+  else if (event.key === "ArrowRight") widthDelta = delta;
+  else if (event.key === "ArrowUp") heightDelta = -delta;
+  else if (event.key === "ArrowDown") heightDelta = delta;
+  else return;
+
+  const rect = root.getBoundingClientRect();
+  ensureExplicitGoalPanelFrame(rect);
+  panelState = {
+    ...panelState,
+    width: clamp((panelState.width ?? rect.width) + widthDelta, GOAL_PANEL_MIN_WIDTH, goalPanelMaxWidth()),
+    height: clamp((panelState.height ?? rect.height) + heightDelta, GOAL_PANEL_MIN_HEIGHT, goalPanelMaxHeight()),
+  };
+  event.preventDefault();
+  event.stopPropagation();
+  applyGoalPanelSize(root);
+  clampGoalPanelToViewport(root);
+  applyGoalPanelPosition(root);
+  saveGoalPanelState();
+}
+
+function resetGoalPanelSize(event: MouseEvent): void {
+  event.preventDefault();
+  event.stopPropagation();
+  panelState = { ...panelState, width: null, height: null };
+  saveGoalPanelState();
+  if (root) {
+    applyGoalPanelSize(root);
+    applyGoalPanelPosition(root);
+  }
+}
+
 function resetGoalPanelPosition(event: MouseEvent): void {
   if (event.target instanceof Element && event.target.closest("button")) return;
   panelState = { ...panelState, x: null, y: null };
   saveGoalPanelState();
   if (root) applyGoalPanelPosition(root);
+}
+
+function ensureExplicitGoalPanelFrame(rect: DOMRect): void {
+  if (panelState.x === null || panelState.y === null) {
+    panelState = { ...panelState, x: rect.left, y: rect.top };
+  }
+  if (panelState.width === null || panelState.height === null) {
+    panelState = { ...panelState, width: rect.width, height: rect.height };
+  }
+  if (root) {
+    applyGoalPanelSize(root);
+    applyGoalPanelPosition(root);
+  }
+}
+
+function applyGoalPanelSize(element: HTMLElement): void {
+  if (panelState.collapsed) {
+    element.style.width = "";
+    element.style.height = "";
+    return;
+  }
+
+  if (panelState.width === null) {
+    element.style.width = "";
+  } else {
+    element.style.width = `${clamp(panelState.width, GOAL_PANEL_MIN_WIDTH, goalPanelMaxWidth())}px`;
+  }
+
+  if (panelState.height === null) {
+    element.style.height = "";
+  } else {
+    element.style.height = `${clamp(panelState.height, GOAL_PANEL_MIN_HEIGHT, goalPanelMaxHeight())}px`;
+  }
 }
 
 function applyGoalPanelPosition(element: HTMLElement): void {
@@ -506,9 +643,19 @@ function clampGoalPanelToViewport(element: HTMLElement): void {
   const rect = element.getBoundingClientRect();
   panelState = {
     ...panelState,
-    x: clamp(panelState.x, 8, window.innerWidth - rect.width - 8),
-    y: clamp(panelState.y, 8, window.innerHeight - rect.height - 8),
+    x: clamp(panelState.x, GOAL_PANEL_VIEWPORT_MARGIN, window.innerWidth - rect.width - GOAL_PANEL_VIEWPORT_MARGIN),
+    y: clamp(panelState.y, GOAL_PANEL_VIEWPORT_MARGIN, window.innerHeight - rect.height - GOAL_PANEL_VIEWPORT_MARGIN),
   };
+}
+
+function goalPanelMaxWidth(): number {
+  const left = panelState.x ?? GOAL_PANEL_VIEWPORT_MARGIN;
+  return Math.max(GOAL_PANEL_MIN_WIDTH, window.innerWidth - left - GOAL_PANEL_VIEWPORT_MARGIN);
+}
+
+function goalPanelMaxHeight(): number {
+  const top = panelState.y ?? GOAL_PANEL_VIEWPORT_MARGIN;
+  return Math.max(GOAL_PANEL_MIN_HEIGHT, window.innerHeight - top - GOAL_PANEL_VIEWPORT_MARGIN);
 }
 
 function readGoalPanelState(): GoalPanelState {
@@ -518,9 +665,11 @@ function readGoalPanelState(): GoalPanelState {
       collapsed: parsed.collapsed === true,
       x: typeof parsed.x === "number" && Number.isFinite(parsed.x) ? parsed.x : null,
       y: typeof parsed.y === "number" && Number.isFinite(parsed.y) ? parsed.y : null,
+      width: typeof parsed.width === "number" && Number.isFinite(parsed.width) ? parsed.width : null,
+      height: typeof parsed.height === "number" && Number.isFinite(parsed.height) ? parsed.height : null,
     };
   } catch {
-    return { collapsed: false, x: null, y: null };
+    return { collapsed: false, x: null, y: null, width: null, height: null };
   }
 }
 
@@ -625,6 +774,8 @@ function installStyles(): void {
   bottom: 76px;
   z-index: 2147483647;
   width: min(420px, calc(100vw - 36px));
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
   font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--text-primary, #f5f7fb);
 }
@@ -673,19 +824,33 @@ function installStyles(): void {
   color: rgba(245,247,251,0.72);
 }
 .codexpp-goal-panel {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  position: fixed;
   border: 1px solid rgba(255,255,255,0.16);
   border-radius: 8px;
   background: rgba(26, 29, 35, 0.96);
   box-shadow: 0 18px 60px rgba(0,0,0,0.34);
   padding: 12px;
   backdrop-filter: blur(14px);
+  overflow: hidden;
+}
+.codexpp-goal-panel:not(.is-collapsed) {
+  min-width: 280px;
+  min-height: 160px;
 }
 .codexpp-goal-panel.is-dragging {
   cursor: grabbing;
   user-select: none;
 }
+.codexpp-goal-panel.is-resizing {
+  cursor: nwse-resize;
+  user-select: none;
+}
 .codexpp-goal-panel.is-collapsed {
   width: min(320px, calc(100vw - 36px));
+  min-height: 0;
   padding: 10px 12px;
 }
 .codexpp-goal-panel.is-error {
@@ -727,17 +892,24 @@ function installStyles(): void {
 }
 .codexpp-goal-detail {
   margin-top: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
   max-height: 96px;
   overflow: auto;
   color: rgba(245,247,251,0.9);
   word-break: break-word;
 }
+.codexpp-goal-panel[style*="height"] .codexpp-goal-detail {
+  max-height: none;
+}
 .codexpp-goal-footer {
+  flex: 0 0 auto;
   margin-top: 8px;
   color: rgba(245,247,251,0.62);
   font-size: 12px;
 }
 .codexpp-goal-actions {
+  flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -761,6 +933,34 @@ function installStyles(): void {
 }
 .codexpp-goal-action.danger {
   border-color: rgba(255, 122, 122, 0.48);
+}
+.codexpp-goal-resize {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: nwse-resize;
+  opacity: 0.72;
+}
+.codexpp-goal-resize::before {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 1px solid rgba(245,247,251,0.7);
+  border-bottom: 1px solid rgba(245,247,251,0.7);
+}
+.codexpp-goal-resize:hover,
+.codexpp-goal-resize:focus-visible {
+  background: rgba(255,255,255,0.08);
+  opacity: 1;
+  outline: none;
 }
 `;
   parent.appendChild(style);
