@@ -113,6 +113,7 @@ function makeRendererApi(manifest, paths) {
             /* swallow — never let logging break a tweak */
         }
     };
+    const git = manifest.permissions?.includes("git.metadata") ? rendererGit() : undefined;
     return {
         manifest,
         process: "renderer",
@@ -168,6 +169,7 @@ function makeRendererApi(manifest, paths) {
             invoke: (c, ...args) => electron_1.ipcRenderer.invoke(`codexpp:${id}:${c}`, ...args),
         },
         fs: rendererFs(id, paths),
+        ...(git ? { git } : {}),
     };
 }
 function rendererStorage(id) {
@@ -203,6 +205,14 @@ function rendererFs(id, _paths) {
         read: (p) => electron_1.ipcRenderer.invoke("codexpp:tweak-fs", "read", id, p),
         write: (p, c) => electron_1.ipcRenderer.invoke("codexpp:tweak-fs", "write", id, p, c),
         exists: (p) => electron_1.ipcRenderer.invoke("codexpp:tweak-fs", "exists", id, p),
+    };
+}
+function rendererGit() {
+    return {
+        resolveRepository: (path) => electron_1.ipcRenderer.invoke("codexpp:git-resolve-repository", path),
+        getStatus: (path) => electron_1.ipcRenderer.invoke("codexpp:git-status", path),
+        getDiffSummary: (path) => electron_1.ipcRenderer.invoke("codexpp:git-diff-summary", path),
+        getWorktrees: (path) => electron_1.ipcRenderer.invoke("codexpp:git-worktrees", path),
     };
 }
 //# sourceMappingURL=tweak-host.js.map

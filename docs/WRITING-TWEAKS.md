@@ -70,8 +70,8 @@ Updates are never installed automatically. Users should review release notes, co
 
 Your tweak default-exports `{ start(api), stop?() }`. The shape of `api` depends on `scope`:
 
-- **renderer**: `api.settings`, `api.react`, `api.ipc`, `api.fs`, `api.storage`, `api.log`
-- **main**: `api.ipc.handle`, `api.fs`, `api.storage`, `api.log`
+- **renderer**: `api.settings`, `api.react`, `api.ipc`, `api.fs`, `api.storage`, `api.log`, and `api.git` when the manifest declares `git.metadata`
+- **main**: `api.ipc.handle`, `api.fs`, `api.storage`, `api.log`, `api.git`
 - **both**: `start(api)` is called once per process; check `api.process` to disambiguate
 
 ### Settings (renderer)
@@ -124,6 +124,23 @@ Main:
 ```ts
 api.ipc.handle("compute", (input) => /* ... */);
 ```
+
+### Git metadata
+
+Declare the metadata-only git permission before using `api.git` from renderer tweaks:
+
+```json
+{
+  "permissions": ["git.metadata"]
+}
+```
+
+```ts
+const status = await api.git.getStatus("/path/to/repo");
+const worktrees = await api.git.getWorktrees(status.repository.root);
+```
+
+The git API returns branch, dirty entries, diff counts, and worktree metadata. It intentionally does not return raw diff hunks, file contents, remote credentials, or ignored file trees by default. Main process owns the git subprocess work and uses bounded `git` invocations with timeouts; renderer tweaks only receive structured metadata over IPC.
 
 ### Filesystem sandbox
 

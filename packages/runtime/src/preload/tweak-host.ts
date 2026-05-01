@@ -157,6 +157,8 @@ function makeRendererApi(manifest: TweakManifest, paths: UserPaths): TweakApi {
     }
   };
 
+  const git = manifest.permissions?.includes("git.metadata") ? rendererGit() : undefined;
+
   return {
     manifest,
     process: "renderer",
@@ -212,6 +214,7 @@ function makeRendererApi(manifest: TweakManifest, paths: UserPaths): TweakApi {
         ipcRenderer.invoke(`codexpp:${id}:${c}`, ...args) as Promise<T>,
     },
     fs: rendererFs(id, paths),
+    ...(git ? { git } : {}),
   };
 }
 
@@ -252,5 +255,18 @@ function rendererFs(id: string, _paths: UserPaths) {
       ipcRenderer.invoke("codexpp:tweak-fs", "write", id, p, c) as Promise<void>,
     exists: (p: string) =>
       ipcRenderer.invoke("codexpp:tweak-fs", "exists", id, p) as Promise<boolean>,
+  };
+}
+
+function rendererGit() {
+  return {
+    resolveRepository: (path: string) =>
+      ipcRenderer.invoke("codexpp:git-resolve-repository", path),
+    getStatus: (path: string) =>
+      ipcRenderer.invoke("codexpp:git-status", path),
+    getDiffSummary: (path: string) =>
+      ipcRenderer.invoke("codexpp:git-diff-summary", path),
+    getWorktrees: (path: string) =>
+      ipcRenderer.invoke("codexpp:git-worktrees", path),
   };
 }
