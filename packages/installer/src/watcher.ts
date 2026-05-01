@@ -47,27 +47,31 @@ export function uninstallWatcher(): void {
 }
 
 const LABEL = "com.codexplusplus.watcher";
+const BETA_LABEL = "com.codexplusplus.watcher.beta";
 
-function launchdPath(): string {
-  return join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
+function launchdPath(label: string): string {
+  return join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
 }
 
 function installLaunchd(appRoot: string): WatcherKind {
   if (isRunningFromWatcher()) return "launchd";
 
-  const plPath = launchdPath();
+  const label = launchdLabelForApp(appRoot);
+  const plPath = launchdPath(label);
   mkdirSync(dirname(plPath), { recursive: true });
-  // Trigger on login + when Codex.app's asar changes. Run this installed CLI
-  // directly so auto-repair does not depend on npm availability.
-  const repair = xmlEscape(
-    `sleep 3; ${cliShellCommand("update", ["--watcher", "--quiet"])} || ${cliShellCommand("repair", ["--quiet"])} || true`,
-  );
+  // Trigger on login + when the app bundle changes. Watching the bundle and
+  // Resources directory catches Sparkle-style atomic replacement in addition
+  // to direct app.asar writes.
+  const repair = xmlEscape(watcherShellCommand(appRoot));
+  const watchPaths = launchdWatchPaths(appRoot)
+    .map((path) => `    <string>${xmlEscape(path)}</string>`)
+    .join("\n");
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>${LABEL}</string>
+  <string>${label}</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/sh</string>
@@ -80,7 +84,7 @@ function installLaunchd(appRoot: string): WatcherKind {
   <integer>3600</integer>
   <key>WatchPaths</key>
   <array>
-    <string>${appRoot}/Contents/Resources/app.asar</string>
+${watchPaths}
   </array>
   <key>ThrottleInterval</key>
   <integer>10</integer>
@@ -91,7 +95,7 @@ function installLaunchd(appRoot: string): WatcherKind {
   </dict>
 </plist>`;
   writeFileSync(plPath, xml);
-  if (!bootstrapLaunchd(plPath)) {
+  if (!bootstrapLaunchd(label, plPath)) {
     try {
       execFileSync("launchctl", ["unload", plPath], { stdio: "ignore" });
     } catch {}
@@ -101,26 +105,28 @@ function installLaunchd(appRoot: string): WatcherKind {
 }
 
 function isRunningFromWatcher(): boolean {
-  return process.env.CODEX_PLUSPLUS_WATCHER === "1" || process.env.XPC_SERVICE_NAME === LABEL;
+  return process.env.CODEX_PLUSPLUS_WATCHER === "1" || (process.env.XPC_SERVICE_NAME ?? "").startsWith(LABEL);
 }
 
 function uninstallLaunchd(): void {
-  const plPath = launchdPath();
-  if (!existsSync(plPath)) return;
-  bootoutLaunchd(plPath);
-  try {
-    execFileSync("launchctl", ["unload", plPath], { stdio: "ignore" });
-  } catch {}
-  rmSync(plPath, { force: true });
+  for (const label of [LABEL, BETA_LABEL]) {
+    const plPath = launchdPath(label);
+    if (!existsSync(plPath)) continue;
+    bootoutLaunchd(plPath);
+    try {
+      execFileSync("launchctl", ["unload", plPath], { stdio: "ignore" });
+    } catch {}
+    rmSync(plPath, { force: true });
+  }
 }
 
-function bootstrapLaunchd(plPath: string): boolean {
+function bootstrapLaunchd(label: string, plPath: string): boolean {
   const domain = launchdGuiDomain();
   if (!domain) return false;
   bootoutLaunchd(plPath);
   try {
     execFileSync("launchctl", ["bootstrap", domain, plPath], { stdio: "ignore" });
-    execFileSync("launchctl", ["enable", `${domain}/${LABEL}`], { stdio: "ignore" });
+    execFileSync("launchctl", ["enable", `${domain}/${label}`], { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -140,12 +146,18 @@ function launchdGuiDomain(): string | null {
   return typeof uid === "number" ? `gui/${uid}` : null;
 }
 
+function launchdWatchPaths(appRoot: string): string[] {
+  return [
+    appRoot,
+    join(appRoot, "Contents", "Resources"),
+    join(appRoot, "Contents", "Resources", "app.asar"),
+  ];
+}
+
 function installSystemd(appRoot: string): WatcherKind {
   const dir = join(homedir(), ".config", "systemd", "user");
   mkdirSync(dir, { recursive: true });
-  const repair = shellSingleQuote(
-    `sleep 3; ${cliShellCommand("update", ["--watcher", "--quiet"])} || ${cliShellCommand("repair", ["--quiet"])} || true`,
-  );
+  const repair = shellSingleQuote(watcherShellCommand(appRoot));
   const unit = `[Unit]
 Description=codex-plusplus repair watcher
 
@@ -251,14 +263,43 @@ function installScheduledTask(_appRoot: string): WatcherKind {
 }
 
 function cliShellCommand(command: string, args: string[] = []): string {
-  return [
+  const env = [
     "CODEX_PLUSPLUS_WATCHER=1",
+    process.env.CODEX_PLUSPLUS_HOME
+      ? `CODEX_PLUSPLUS_HOME=${shellQuote(process.env.CODEX_PLUSPLUS_HOME)}`
+      : null,
+  ].filter((item): item is string => item !== null);
+
+  return [
+    ...env,
     shellQuote(process.execPath),
     ...process.execArgv.map(shellQuote),
     shellQuote(currentCliPath()),
     command,
-    ...args,
+    ...args.map(shellQuote),
   ].join(" ");
+}
+
+function watcherShellCommand(appRoot: string): string {
+  const update = cliShellCommand("update", ["--watcher", "--quiet"]);
+  const repair = cliShellCommand("repair", ["--quiet", "--app", appRoot]);
+  return [
+    "sleep 3",
+    "echo \"[codex-plusplus watcher] start $(date -u +%Y-%m-%dT%H:%M:%SZ)\"",
+    update,
+    "update_status=$?",
+    "if [ \"$update_status\" -eq 0 ]; then echo \"[codex-plusplus watcher] update/repair check ok\"; exit 0; fi",
+    "echo \"[codex-plusplus watcher] update failed ($update_status); trying repair\"",
+    repair,
+    "repair_status=$?",
+    "if [ \"$repair_status\" -eq 0 ]; then echo \"[codex-plusplus watcher] repair ok\"; exit 0; fi",
+    "echo \"[codex-plusplus watcher] repair failed ($repair_status)\"",
+    "exit \"$repair_status\"",
+  ].join("; ");
+}
+
+function launchdLabelForApp(appRoot: string): string {
+  return /beta/i.test(appRoot) ? BETA_LABEL : LABEL;
 }
 
 function currentCliPath(): string {
